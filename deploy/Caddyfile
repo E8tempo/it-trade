@@ -1,0 +1,26 @@
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Product photos: served straight from the media volume; a miss goes to the API,
+	# which downloads the image, removes the watermark and stores it.
+	handle /media/* {
+		root * /srv
+		@exists file
+		handle @exists {
+			header Cache-Control "public, max-age=31536000, immutable"
+			file_server
+		}
+		handle {
+			reverse_proxy api:8000
+		}
+	}
+
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	# TODO: route to the Next.js frontend once it is added (reverse_proxy web:3000)
+	handle {
+		respond "IT Trade: API is running, frontend is not deployed yet" 200
+	}
+}
