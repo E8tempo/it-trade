@@ -1,0 +1,24 @@
+# secrets: root .env (docker compose), backend/.env (development)
+.env
+.env.local
+
+# python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# local data: dev database, processed photos
+backend/data/
+
+# node / next (see also frontend/.gitignore)
+node_modules/
+.next/
+
+# editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

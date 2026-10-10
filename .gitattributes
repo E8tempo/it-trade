@@ -1,0 +1,8 @@
+# LF in the repository and in checkouts: the files end up in Linux containers
+* text=auto eol=lf
+
+*.jpg binary
+*.png binary
+*.ico binary
+*.webp binary
+*.npz binary

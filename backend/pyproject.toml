@@ -1,0 +1,39 @@
+[project]
+name = "it-trade-backend"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi[standard]>=0.143",
+    "sqlalchemy[asyncio]>=2.1",
+    "asyncpg>=0.32",
+    "aiosqlite>=0.21",
+    "alembic>=1.20",
+    "pydantic-settings>=2.15",
+    "httpx>=0.28",
+    "ijson>=3.5",
+    "numpy>=2.5",
+    "opencv-python-headless>=4.10",
+    "pillow>=12.3",
+    "tzdata",
+    "pyjwt>=2.10",
+    "argon2-cffi>=25.1",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=1"]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+"app.images" = ["data/*.npz"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
