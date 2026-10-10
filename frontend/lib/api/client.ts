@@ -1,0 +1,39 @@
+"use client";
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public detail: unknown,
+  ) {
+    super(`API ${status}`);
+  }
+}
+
+let refreshing: Promise<boolean> | null = null;
+
+/** One refresh at a time: parallel 401s wait for the same request. */
+function refreshSession(): Promise<boolean> {
+  refreshing ??= fetch("/api/auth/refresh", { method: "POST" })
+    .then((r) => r.ok)
+    .catch(() => false)
+    .finally(() => {
+      refreshing = null;
+    });
+  return refreshing;
+}
+
+/**
+ * Fetch from the browser. The API is same-origin (/api is proxied), so the httpOnly session
+ * cookies are sent automatically; on 401 the session is refreshed once and the call retried.
+ */
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+
+  let res = await fetch(path, { ...init, headers });
+  if (res.status === 401 && !path.startsWith("/api/auth/") && (await refreshSession())) {
+    res = await fetch(path, { ...init, headers });
+  }
+  if (!res.ok) throw new ApiError(res.status, await res.json().catch(() => null));
+  return (res.status === 204 ? undefined : await res.json()) as T;
+}
