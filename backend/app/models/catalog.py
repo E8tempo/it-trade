@@ -59,7 +59,9 @@ class Product(TimestampMixin, Base):
 
     # Stock & price (from get_active_products)
     supplier_price: Mapped[Decimal | None] = mapped_column(Money)
-    price: Mapped[Decimal | None] = mapped_column(Money)  # retail price after markup rules
+    price: Mapped[Decimal | None] = mapped_column(Money)  # retail price: the override or the markup rules
+    price_override: Mapped[Decimal | None] = mapped_column(Money)  # fixed retail price set by admin
+    is_hidden: Mapped[bool] = mapped_column(default=False)  # hidden from the shop by admin
     qty_central: Mapped[int] = mapped_column(default=0)
     qty_nearest: Mapped[int] = mapped_column(default=0)
     delivery_days: Mapped[int | None]

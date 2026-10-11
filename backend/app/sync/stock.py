@@ -29,10 +29,12 @@ async def apply_stock(items: list[dict]) -> dict:
     async with SessionLocal() as session:
         pricing = await get_settings_obj(session, PricingSettings)
         known = {
-            sku: (rrp, path)
-            for sku, rrp, path in (
+            sku: (rrp, path, override)
+            for sku, rrp, path, override in (
                 await session.execute(
-                    select(Product.sku, Product.rrp, Category.path).outerjoin(Category, Category.id == Product.category_id)
+                    select(Product.sku, Product.rrp, Category.path, Product.price_override).outerjoin(
+                        Category, Category.id == Product.category_id
+                    )
                 )
             ).all()
         }
@@ -48,11 +50,11 @@ async def apply_stock(items: list[dict]) -> dict:
             continue
         if supplier_price <= 0:
             continue
-        rrp, path = known[sku]
+        rrp, path, override = known[sku]
         rows.append({
             "sku": sku,
             "supplier_price": supplier_price,
-            "price": retail_price(supplier_price, rrp, path, pricing),
+            "price": override or retail_price(supplier_price, rrp, path, pricing),
             "qty_central": _qty(it, "real_qty", "qty"),
             "qty_nearest": _qty(it, "nearest_logistic_center_real_qty", "nearest_logistic_center_qty"),
             "delivery_days": it.get("delivery_days"),
@@ -76,17 +78,20 @@ async def apply_stock(items: list[dict]) -> dict:
 
 
 async def reprice_all() -> int:
-    """Recompute retail prices after the pricing settings changed."""
+    """Recompute retail prices after the pricing settings changed (fixed prices set by admin stay)."""
     async with SessionLocal() as session:
         pricing = await get_settings_obj(session, PricingSettings)
         data = (
             await session.execute(
-                select(Product.sku, Product.supplier_price, Product.rrp, Category.path)
+                select(Product.sku, Product.supplier_price, Product.rrp, Category.path, Product.price_override)
                 .outerjoin(Category, Category.id == Product.category_id)
                 .where(Product.supplier_price.is_not(None))
             )
         ).all()
-        rows = [{"sku": sku, "price": retail_price(sp, rrp, path, pricing)} for sku, sp, rrp, path in data]
+        rows = [
+            {"sku": sku, "price": override or retail_price(sp, rrp, path, pricing)}
+            for sku, sp, rrp, path, override in data
+        ]
         for i in range(0, len(rows), BATCH):
             await session.execute(update(Product), rows[i : i + BATCH])
         await session.commit()
@@ -100,7 +105,7 @@ async def recount_categories() -> None:
             (
                 await session.execute(
                     select(Product.category_id, func.count())
-                    .where(Product.in_stock, Product.is_active, Product.category_id.is_not(None))
+                    .where(Product.in_stock, Product.is_active, ~Product.is_hidden, Product.category_id.is_not(None))
                     .group_by(Product.category_id)
                 )
             ).all()
