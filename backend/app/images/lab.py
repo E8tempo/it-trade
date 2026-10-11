@@ -72,6 +72,7 @@ def analyze(data: bytes) -> dict:
     result["fit"] = {
         "pixels": fit[0]["pixels"] if fit else 0,
         "fallback": trace.get("fallback", True),
+        "switched": trace.get("switched"),
         "grey": rm.color,
         "candidates": [{**c, "chosen": c.get("chosen", False)} for c in fit[1:]],
     }

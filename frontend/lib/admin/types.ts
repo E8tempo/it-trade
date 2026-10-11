@@ -180,6 +180,7 @@ export type LabResult = {
   fit?: {
     pixels: number;
     fallback: boolean;
+    switched: [number, number] | null;
     grey: number;
     candidates: { layers: number; shared: boolean; colours: number[]; error: number; plausible: boolean; chosen: boolean }[];
   };

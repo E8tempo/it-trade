@@ -166,6 +166,20 @@ def test_detection_one_pixel_off_is_moved_back(offset):
     assert np.percentile(diff, 99.9) <= 2
 
 
+@pytest.mark.parametrize(("dx", "dy"), [(0.5, 0.0), (-0.5, 0.5)])
+def test_mark_between_pixels_is_found(dx, dy):
+    """A photo resampled after watermarking can carry the mark half a pixel off the pixel grid."""
+    rm = default_remover()
+    clean = synthetic_photo(801, 800, seed=8)
+    truth = expected_detection(rm, "big", 801, 800)
+    marked = apply_watermark(rm, clean, replace(truth, dx=dx, dy=dy))
+    restored, found = rm.remove(marked, truth, chroma_subsampling=(1, 1))
+    assert found is not None and (found.x + found.dx, found.y + found.dy) == (truth.x + dx, truth.y + dy)
+    diff = np.abs(restored.astype(int) - clean.astype(int))
+    assert diff.mean() < 0.3
+    assert np.percentile(diff, 99.9) <= 2
+
+
 def test_ghost_on_plain_surface_is_cleaned_without_blurring_edges():
     """A mark a bit blurrier than the template (the photo was resampled after watermarking) fits no
     model of the strokes and the inversion leaves outlines; on plain surfaces they are inpainted away."""
@@ -191,6 +205,27 @@ def test_ghost_on_plain_surface_is_cleaned_without_blurring_edges():
     rows = np.flatnonzero(strokes[:, 395:405].any(axis=1))
     step = restored[rows, 398].astype(int) - restored[rows, 401].astype(int)
     assert step.min() > 60  # still a one pixel edge (80 levels in the clean photo)
+
+
+def test_a_model_that_leaves_the_mark_is_replaced():
+    """The colour fit sees only strokes over smooth background: a black layer fitted on a dark product
+    can stand in for two grey ones there. Along all the strokes it still leaves the mark, so a fitted
+    candidate that removes it wins."""
+    rm = default_remover()
+    clean = np.full((800, 800, 3), 60, np.uint8)
+    clean[:, 400:] = 210  # a light label next to the dark product
+    det = expected_detection(rm, "big", 800, 800)
+    twice = apply_watermark(rm, apply_watermark(rm, clean, det), det)
+    fit = [
+        {"pixels": 1000},
+        {"layers": 1, "shared": True, "colours": [-10.0], "error": 1.0, "plausible": True, "chosen": True},
+        {"layers": 2, "shared": True, "colours": [rm.color, rm.color], "error": 1.5, "plausible": True},
+    ]
+    trace: dict = {}
+    restored, colours = rm._least_left(twice, det, (1, 1), fit, trace)
+    assert colours == [rm.color, rm.color] and fit[2]["chosen"] and not fit[1]["chosen"]
+    assert trace["switched"][0] > 0.15 > trace["switched"][1]
+    assert np.abs(restored.astype(int) - clean.astype(int)).mean() < 0.5
 
 
 def test_layer_colours_are_judged_as_a_stack():
