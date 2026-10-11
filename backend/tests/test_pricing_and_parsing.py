@@ -50,3 +50,25 @@ def test_product_row_from_supplier_json():
 def test_slugify():
     assert slugify("Кресла детские, автомобильные!") == "kresla-detskie-avtomobilnye"
     assert slugify("!!!") == "item"
+
+
+def test_spread_sample_takes_turns_between_root_categories():
+    from app.sync.products import spread_sample
+
+    def entry(sku, in_stock=True):
+        return ((in_stock, sku), {"sku": sku})
+
+    # root 1 has three categories, root 2 one category with three products
+    sample = {
+        11: [entry(110), entry(111, in_stock=False)],
+        12: [entry(120)],
+        13: [entry(130, in_stock=False)],
+        21: [entry(210), entry(211), entry(212)],
+    }
+    root_of = {11: 1, 12: 1, 13: 1, 21: 2}
+    picked = [r["sku"] for r in spread_sample(sample, root_of, 4)]
+    # roots alternate; inside a root: categories with in-stock products first, one product each first
+    assert picked == [120, 212, 110, 211]
+    everything = [r["sku"] for r in spread_sample(sample, root_of, 100)]
+    assert sorted(everything) == [110, 111, 120, 130, 210, 211, 212]
+    assert everything[-1] in (111, 130)  # out-of-stock products come last

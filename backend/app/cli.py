@@ -34,8 +34,8 @@ async def _process(n: int) -> None:
 
     async with SupplierClient() as client:
         batch = await next_pending(n, include_out_of_stock=True)
-        ok = await asyncio.gather(*(process_one(client, None, iid, url) for iid, url in batch))
-        print(f"{sum(ok)}/{len(ok)} processed")
+        ok = await asyncio.gather(*(process_one(client, None, iid, url) for iid, url in batch), return_exceptions=True)
+        print(f"{sum(r is True for r in ok)}/{len(ok)} processed")
 
 
 async def _probe(sku: int) -> None:
@@ -81,11 +81,12 @@ async def _requeue(variant: str | None) -> None:
     from app.models import ProductImage
     from app.models.catalog import ImageStatus
 
+    # stale: the current files stay visible until the image is processed again
     q = update(ProductImage).where(ProductImage.status == ImageStatus.ready)
     if variant:
         q = q.where(ProductImage.wm_template.in_([variant, f"{variant}-rot"]))
     async with SessionLocal() as session:
-        res = await session.execute(q.values(status=ImageStatus.pending, attempts=0))
+        res = await session.execute(q.values(status=ImageStatus.stale, attempts=0))
         await session.commit()
     print(res.rowcount, "images queued")
 
@@ -111,9 +112,10 @@ def main() -> None:
     ip = sub.add_parser("import-products")
     ip.add_argument("file", type=Path)
     ip.add_argument("--sample", type=int, default=None, help="max products per category (default: CATALOG_SAMPLE_PER_CATEGORY)")
+    ip.add_argument("--limit", type=int, default=None, help="max products in total (default: CATALOG_SAMPLE_LIMIT)")
     sub.add_parser("process-images").add_argument("n", type=int, nargs="?", default=50)
     sub.add_parser("reprice")
-    sub.add_parser("requeue-images").add_argument("variant", nargs="?", choices=["big", "mid", "small"])
+    sub.add_parser("requeue-images").add_argument("variant", nargs="?", choices=["big", "mid", "small", "tiny"])
     wt = sub.add_parser("watermark-test")
     wt.add_argument("src", type=Path)
     wt.add_argument("dst", type=Path)
@@ -136,8 +138,10 @@ def main() -> None:
 
             from app.config import get_settings
 
-            n = a.sample if a.sample is not None else get_settings().catalog_sample_per_category
-            print(asyncio.run(import_products_file(a.file, n)))
+            s = get_settings()
+            n = a.sample if a.sample is not None else s.catalog_sample_per_category
+            limit = a.limit if a.limit is not None else s.catalog_sample_limit
+            print(asyncio.run(import_products_file(a.file, n, sample_limit=limit)))
         case "process-images":
             asyncio.run(_process(a.n))
         case "reprice":

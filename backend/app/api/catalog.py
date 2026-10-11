@@ -2,7 +2,7 @@ import time
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import Select, and_, case, func, select
+from sqlalchemy import Select, and_, case, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -18,7 +18,7 @@ from app.api.schemas import (
 )
 from app.db import get_session
 from app.models import Category, Product, ProductImage
-from app.models.catalog import ImageStatus
+from app.models.catalog import VISIBLE_STATUSES, ImageStatus
 from app.site_settings import ShopSettings, get_settings_obj
 
 router = APIRouter(prefix="/api", tags=["catalog"])
@@ -47,14 +47,24 @@ def _build_tree(cats: list[Category]) -> list[CategoryNode]:
     return roots
 
 
-@router.get("/categories", response_model=list[CategoryNode])
-async def category_tree(session: Session):
+def _trim(nodes: list[CategoryNode], depth: int) -> list[CategoryNode]:
+    return [n.model_copy(update={"children": _trim(n.children, depth - 1) if depth > 1 else []}) for n in nodes]
+
+
+async def _full_tree(session: AsyncSession) -> list[CategoryNode]:
     global _tree_cache
     if _tree_cache and time.monotonic() - _tree_cache[0] < TREE_TTL:
         return _tree_cache[1]
     tree = _build_tree(await _visible_categories(session))
     _tree_cache = (time.monotonic(), tree)
     return tree
+
+
+@router.get("/categories", response_model=list[CategoryNode])
+async def category_tree(session: Session, depth: Annotated[int | None, Query(ge=1, le=10)] = None):
+    """Visible category tree; `depth` limits the number of levels (e.g. 2 for a menu)."""
+    tree = await _full_tree(session)
+    return _trim(tree, depth) if depth else tree
 
 
 async def _breadcrumbs(session: AsyncSession, path: str) -> list[CategoryRef]:
@@ -68,7 +78,7 @@ async def category_detail(category_id: int, session: Session):
     c = await session.get(Category, category_id)
     if not c or not c.is_active or c.is_hidden:
         raise HTTPException(404, "Category not found")
-    tree = await category_tree(session)
+    tree = await _full_tree(session)
 
     def find(nodes: list[CategoryNode]) -> CategoryNode | None:
         for n in nodes:
@@ -131,6 +141,9 @@ async def products(
     sort: Literal["popular", "price_asc", "price_desc", "new", "name"] = "popular",
     page: Annotated[int, Query(ge=1, le=1000)] = 1,
     per_page: Annotated[int, Query(ge=1, le=96)] = 24,
+    with_image: bool = False,  # only products whose main photo is ready (showcases)
+    exclude: int | None = None,  # e.g. the current product in "similar products"
+    facets: bool = True,  # vendors and price range; off for search suggestions
 ):
     shop = await get_settings_obj(session, ShopSettings)
     path = None
@@ -139,13 +152,19 @@ async def products(
         if not c:
             raise HTTPException(404, "Category not found")
         path = c.path
-    vendors, pmin, pmax = await _facets(session, q, category, path, not shop.show_out_of_stock)
+    vendors, pmin, pmax = await _facets(session, q, category, path, not shop.show_out_of_stock) if facets else ([], None, None)
 
     stmt = _filtered(q, category, path, vendor, not shop.show_out_of_stock)
     if min_price is not None:
         stmt = stmt.where(Product.price >= min_price)
     if max_price is not None:
         stmt = stmt.where(Product.price <= max_price)
+    if with_image:
+        stmt = stmt.where(
+            exists().where(ProductImage.id == Product.main_image_id, ProductImage.status.in_(VISIBLE_STATUSES))
+        )
+    if exclude is not None:
+        stmt = stmt.where(Product.sku != exclude)
     total = await session.scalar(select(func.count()).select_from(stmt.subquery()))
 
     order = SORTS[sort]
@@ -156,7 +175,7 @@ async def products(
     rows = (
         await session.execute(
             stmt.add_columns(img)
-            .outerjoin(img, and_(img.id == Product.main_image_id, img.status == ImageStatus.ready))
+            .outerjoin(img, and_(img.id == Product.main_image_id, img.status.in_(VISIBLE_STATUSES)))
             .order_by(*order)
             .offset((page - 1) * per_page)
             .limit(per_page)

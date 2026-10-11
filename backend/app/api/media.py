@@ -17,6 +17,7 @@ from app.db import SessionLocal
 from app.images.processing import SIZES, image_path
 from app.models import ProductImage
 from app.models.catalog import ImageStatus
+from app.supplier.client import SupplierUnavailable
 from app.sync.images import process_one
 
 router = APIRouter(tags=["media"])
@@ -43,7 +44,10 @@ async def product_image(shard: str, name: str, request: Request):
         lock = _locks[image_id]
         async with lock:
             if not path.exists():
-                ok = await process_one(request.app.state.ondemand_client, None, image_id, img.source_url)
+                try:
+                    ok = await process_one(request.app.state.ondemand_client, None, image_id, img.source_url)
+                except SupplierUnavailable:
+                    ok = False
                 if not ok:
                     raise HTTPException(503, headers={"Retry-After": "60"})
         _locks.pop(image_id, None)
