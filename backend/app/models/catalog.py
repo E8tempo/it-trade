@@ -87,9 +87,14 @@ class Product(TimestampMixin, Base):
 
 
 class ImageStatus(StrEnum):
-    pending = "pending"
+    pending = "pending"  # not processed yet
     ready = "ready"
+    stale = "stale"  # processed, files are served, but queued for processing again (e.g. after calibration)
     failed = "failed"
+
+
+# statuses whose files exist and can be shown
+VISIBLE_STATUSES = (ImageStatus.ready, ImageStatus.stale)
 
 
 class ProductImage(Base):

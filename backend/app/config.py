@@ -39,8 +39,9 @@ class Settings(BaseSettings):
     supplier_login: str = ""
     supplier_password: SecretStr = SecretStr("")
     supplier_pricelist: int = 9  # suffix of catalog_tree_N.json / products_N.json
-    # Development: import at most N products with photos per category (in-stock ones first), 0 = all
-    catalog_sample_per_category: int = 0
+    # Development samples of the catalog (products with photos, in-stock ones first), 0 = off:
+    catalog_sample_per_category: int = 0  # at most N products per category
+    catalog_sample_limit: int = 0  # at most N products in total, spread over the root categories
 
     # Media
     media_root: Path = BASE_DIR / "data" / "media"

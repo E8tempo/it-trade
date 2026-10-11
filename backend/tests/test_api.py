@@ -83,3 +83,21 @@ async def test_admin_requires_admin_role_and_reprices(client):
     assert r.status_code == 200
     d = (await client.get("/api/products/11")).json()
     assert d["price"] == 44000.0
+
+
+async def test_category_tree_depth(client):
+    full = (await client.get("/api/categories")).json()
+    assert full[0]["children"][0]["id"] == 2
+    trimmed = (await client.get("/api/categories", params={"depth": 1})).json()
+    assert trimmed[0]["id"] == 1 and trimmed[0]["children"] == []
+    # the cached full tree is not affected by trimming
+    assert (await client.get("/api/categories")).json()[0]["children"][0]["id"] == 2
+
+
+async def test_showcase_filters(client):
+    page = (await client.get("/api/products", params={"with_image": "true"})).json()
+    assert [i["sku"] for i in page["items"]] == [10]  # the only product with a ready main photo
+    page = (await client.get("/api/products", params={"category": 1, "exclude": 10})).json()
+    assert [i["sku"] for i in page["items"]] == [11]
+    page = (await client.get("/api/products", params={"q": "ноутбук", "facets": "false"})).json()
+    assert page["vendors"] == [] and page["price_min"] is None and page["total"] == 2

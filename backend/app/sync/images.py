@@ -6,7 +6,7 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from datetime import timedelta
 
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import case, delete, or_, select, update
 
 from app.config import get_settings
 from app.db import SessionLocal
@@ -14,7 +14,7 @@ from app.images.processing import delete_image_files, process_image
 from app.models import Product, ProductImage
 from app.models.base import utcnow
 from app.models.catalog import ImageStatus
-from app.supplier.client import SupplierClient, SupplierError
+from app.supplier.client import SupplierClient, SupplierError, SupplierNotFound, SupplierUnavailable
 
 log = logging.getLogger(__name__)
 LIST_BATCH = 100
@@ -66,8 +66,8 @@ async def apply_image_lists(skus: list[int], items: list[dict]) -> int:
                 if iid in keep or (row is not None and row.sku != sku and row.sku not in main):
                     continue  # the same image record is already attached to another product
                 keep.add(iid)
-                if main[sku] is None:
-                    main[sku] = iid
+                if main[sku] is None and not (row is not None and row.status == ImageStatus.failed and row.source_url == it["url"]):
+                    main[sku] = iid  # a photo that is broken at the supplier is not used as the main one
                 if row is None:
                     session.add(ProductImage(id=iid, sku=sku, source_url=it["url"], position=pos, priority=it.get("priority") or 0))
                     changed += 1
@@ -102,6 +102,22 @@ async def sync_image_lists(client: SupplierClient, max_products: int = 20000) ->
 # --- processing ---------------------------------------------------------------------------------
 
 
+async def replace_failed_main(session, sku: int) -> None:
+    """If the product's main photo failed, show its next photo instead."""
+    product = await session.get(Product, sku)
+    if product is None or product.main_image_id is None:
+        return
+    main = await session.get(ProductImage, product.main_image_id)
+    if main is None or main.status != ImageStatus.failed:
+        return
+    product.main_image_id = await session.scalar(
+        select(ProductImage.id)
+        .where(ProductImage.sku == sku, ProductImage.status != ImageStatus.failed)
+        .order_by(ProductImage.position)
+        .limit(1)
+    )
+
+
 async def next_pending(limit: int, *, include_out_of_stock: bool, gallery: bool = True) -> list[tuple[int, str]]:
     """Main images of in-stock products first, then their other images (unless `gallery` is off:
     those are then processed on first view), then out-of-stock products if requested."""
@@ -109,17 +125,21 @@ async def next_pending(limit: int, *, include_out_of_stock: bool, gallery: bool 
         base = (
             select(ProductImage.id, ProductImage.source_url)
             .join(Product, Product.sku == ProductImage.sku)
-            .where(ProductImage.status == ImageStatus.pending, ProductImage.attempts < MAX_ATTEMPTS)
+            .where(ProductImage.status.in_((ImageStatus.pending, ImageStatus.stale)), ProductImage.attempts < MAX_ATTEMPTS)
         )
+        # never processed first, re-processing of already shown photos after that
+        order = (case((ProductImage.status == ImageStatus.pending, 0), else_=1), ProductImage.position, ProductImage.id)
         if not gallery:
             base = base.where(ProductImage.position == 0)
-        rows = (await session.execute(base.where(Product.in_stock).order_by(ProductImage.position, ProductImage.id).limit(limit))).all()
+        rows = (await session.execute(base.where(Product.in_stock).order_by(*order).limit(limit))).all()
         if not rows and include_out_of_stock:
-            rows = (await session.execute(base.order_by(ProductImage.position, ProductImage.id).limit(limit))).all()
+            rows = (await session.execute(base.order_by(*order).limit(limit))).all()
         return [tuple(r) for r in rows]
 
 
 async def process_one(client: SupplierClient, pool: ProcessPoolExecutor | None, image_id: int, url: str) -> bool:
+    """Downloads, cleans and stores one photo. Raises SupplierUnavailable on network trouble
+    (the image stays queued and its attempts are not used up)."""
     s = get_settings()
     try:
         data = await client.fetch_image(url, size="original")
@@ -127,15 +147,19 @@ async def process_one(client: SupplierClient, pool: ProcessPoolExecutor | None, 
             res = await asyncio.to_thread(process_image, data, str(s.media_root), image_id)
         else:
             res = await asyncio.get_running_loop().run_in_executor(pool, process_image, data, str(s.media_root), image_id)
+    except SupplierUnavailable:
+        raise
     except (SupplierError, OSError, ValueError) as e:
         log.warning("image %s (%s) failed: %s", image_id, url, e)
         async with SessionLocal() as session:
             img = await session.get(ProductImage, image_id)
             if img:
-                img.attempts += 1
+                img.attempts = MAX_ATTEMPTS if isinstance(e, SupplierNotFound) else img.attempts + 1
                 img.error = str(e)[:500]
                 if img.attempts >= MAX_ATTEMPTS:
                     img.status = ImageStatus.failed
+                    await session.flush()
+                    await replace_failed_main(session, img.sku)
                 await session.commit()
         return False
     async with SessionLocal() as session:
@@ -143,6 +167,8 @@ async def process_one(client: SupplierClient, pool: ProcessPoolExecutor | None, 
             update(ProductImage)
             .where(ProductImage.id == image_id)
             .values(
+                # re-processed files keep their paths: a new version changes the URL (?v=) past browser caches
+                version=case((ProductImage.status == ImageStatus.stale, ProductImage.version + 1), else_=ProductImage.version),
                 status=ImageStatus.ready,
                 width=res.width,
                 height=res.height,

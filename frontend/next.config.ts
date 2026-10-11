@@ -16,6 +16,12 @@ const nextConfig: NextConfig = {
     agentFeedback: true,
   },
   cacheComponents: true,
+  cacheLife: {
+    // categories, shop settings: change rarely
+    structure: { stale: 300, revalidate: 3600, expire: 86400 },
+    // products, prices, stock: the backend syncs stock every 30 minutes
+    catalog: { stale: 60, revalidate: 300, expire: 3600 },
+  },
   partialPrefetching: true,
   turbopack: {
     rules: {

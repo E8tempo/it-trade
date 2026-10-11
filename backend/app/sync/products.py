@@ -3,7 +3,7 @@
 import heapq
 import logging
 import tempfile
-from collections import defaultdict
+from collections import defaultdict, deque
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -81,15 +81,52 @@ def product_row(p: dict, categories: set[int], now) -> dict | None:
     }
 
 
-async def import_products_file(path: Path, sample_per_category: int = 0, prefer: set[int] | None = None) -> dict:
+SampleEntry = tuple[tuple[bool, int], dict]
+
+
+def spread_sample(sample: dict[int, list[SampleEntry]], root_of: dict[int, int], limit: int) -> list[dict]:
+    """Up to `limit` rows spread over the whole catalog: the root categories take turns, each going
+    through its categories (the best product of every category first, then the second ones...).
+    Entries are ((in_stock, sku), row): in-stock products and categories that have them go first."""
+    queues: dict[int, deque[list[SampleEntry]]] = {}
+    for cat_id, heap in sample.items():
+        entries = sorted(heap, key=lambda e: e[0], reverse=True)
+        if entries:
+            queues.setdefault(root_of.get(cat_id, cat_id), deque()).append(entries)
+    for root, q in queues.items():
+        queues[root] = deque(sorted(q, key=lambda entries: entries[0][0], reverse=True))
+    picked: list[dict] = []
+    roots = sorted(queues)
+    while roots and len(picked) < limit:
+        for root in list(roots):
+            q = queues[root]
+            entries = q.popleft()
+            picked.append(entries.pop(0)[1])
+            if entries:
+                q.append(entries)
+            if not q:
+                roots.remove(root)
+            if len(picked) >= limit:
+                break
+    return picked
+
+
+async def import_products_file(
+    path: Path, sample_per_category: int = 0, prefer: set[int] | None = None, sample_limit: int = 0
+) -> dict:
     """Upserts the supplier catalog; products missing from it are deactivated.
 
-    With `sample_per_category` > 0 (development) only up to N products with photos per category
-    are kept: the ones in `prefer` (in stock) first, then the newest.
+    Development samples (only products with photos; the ones in `prefer`, i.e. in stock, first):
+      * `sample_per_category` > 0: up to N products per category;
+      * `sample_limit` > 0: at most this many products in total, spread over the root categories.
     """
     now = utcnow()
     async with SessionLocal() as session:
-        categories = set((await session.scalars(select(Category.id))).all())
+        paths = dict((await session.execute(select(Category.id, Category.path))).all())
+    categories = set(paths)
+    root_of = {cid: int(p.strip("/").split("/")[0]) for cid, p in paths.items()}
+    if sample_limit and not sample_per_category:
+        sample_per_category = 3  # enough depth for categories that are picked more than once
     prefer = prefer or set()
     total = 0
     batch: list[dict] = []
@@ -115,7 +152,10 @@ async def import_products_file(path: Path, sample_per_category: int = 0, prefer:
                 total += await _flush(batch)
                 batch = []
     if sample_per_category:
-        batch = [row for heap in sample.values() for _, row in heap]
+        if sample_limit:
+            batch = spread_sample(sample, root_of, sample_limit)
+        else:
+            batch = [row for heap in sample.values() for _, row in heap]
         for i in range(0, len(batch), BATCH):
             total += await _flush(batch[i : i + BATCH])
     else:
@@ -127,7 +167,8 @@ async def import_products_file(path: Path, sample_per_category: int = 0, prefer:
             .values(is_active=False, in_stock=False)
         )
         await session.commit()
-    log.info("products: %d upserted, %d deactivated%s", total, res.rowcount, f" (sample {sample_per_category}/category)" if sample_per_category else "")
+    sample_info = f" (dev sample: {sample_per_category}/category, limit {sample_limit or '-'})" if sample_per_category else ""
+    log.info("products: %d upserted, %d deactivated%s", total, res.rowcount, sample_info)
     return {"products": total, "deactivated": res.rowcount}
 
 
@@ -141,9 +182,10 @@ async def _flush(batch: list[dict]) -> int:
 
 
 async def sync_products(client: SupplierClient) -> dict:
-    n = get_settings().catalog_sample_per_category
-    # the dev sample prefers in-stock products (one extra get_active_products call, limit 10/hour)
-    prefer = {it["sku"] for it in await client.get_active_products()} if n and client.has_credentials else None
+    s = get_settings()
+    n, limit = s.catalog_sample_per_category, s.catalog_sample_limit
+    # a dev sample prefers in-stock products (one extra get_active_products call, limit 10/hour)
+    prefer = {it["sku"] for it in await client.get_active_products()} if (n or limit) and client.has_credentials else None
     with tempfile.TemporaryDirectory() as tmp:
         f = await client.download(f"/download/catalog/json/products_{client.s.supplier_pricelist}.json", Path(tmp) / "products.json")
-        return await import_products_file(f, n, prefer)
+        return await import_products_file(f, n, prefer, limit)

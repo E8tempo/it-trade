@@ -17,7 +17,7 @@ from app.config import get_settings
 from app.db import SessionLocal
 from app.models import JobState
 from app.models.base import utcnow
-from app.supplier.client import SupplierClient
+from app.supplier.client import SupplierClient, SupplierUnavailable
 from app.sync.categories import sync_categories
 from app.sync.images import next_pending, process_one, sync_image_lists
 from app.sync.products import sync_products
@@ -123,8 +123,18 @@ async def image_loop(client: SupplierClient, pool: ProcessPoolExecutor, stop: as
                 pass
             continue
         # downloads are paced by the client's rate limiter, CPU work goes to the pool
-        results = await asyncio.gather(*(process_one(client, pool, iid, url) for iid, url in batch))
-        log.info("images: %d processed, %d failed", sum(results), len(results) - sum(results))
+        results = await asyncio.gather(*(process_one(client, pool, iid, url) for iid, url in batch), return_exceptions=True)
+        done = sum(r is True for r in results)
+        unavailable = sum(isinstance(r, SupplierUnavailable) for r in results)
+        for r in results:
+            if isinstance(r, BaseException) and not isinstance(r, SupplierUnavailable):
+                log.error("image processing crashed", exc_info=r)
+        log.info("images: %d processed, %d failed, %d postponed (supplier unreachable)", done, len(results) - done - unavailable, unavailable)
+        if unavailable:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=60)  # give the supplier a break
+            except TimeoutError:
+                pass
 
 
 async def main() -> None:

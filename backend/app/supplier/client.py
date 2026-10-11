@@ -17,6 +17,14 @@ class SupplierError(RuntimeError):
     pass
 
 
+class SupplierNotFound(SupplierError):
+    """The file does not exist at the supplier (some image records point to missing files)."""
+
+
+class SupplierUnavailable(SupplierError):
+    """Network trouble (timeouts, refused connections): not the request's fault, retry later."""
+
+
 class RateLimiter:
     """Allows at most one call per `interval` seconds (shared by all coroutines of the process)."""
 
@@ -163,7 +171,12 @@ class SupplierClient:
     async def fetch_image(self, url: str, size: str = "large") -> bytes:
         """Download a product image (limit 5/s, shared between worker and on-demand requests)."""
         async with self._image_limit:
-            r = await self._http.get("/" + url.lstrip("/"), params={"size": size}, cookies=await self._cookies())
+            try:
+                r = await self._http.get("/" + url.lstrip("/"), params={"size": size}, cookies=await self._cookies())
+            except httpx.TransportError as e:
+                raise SupplierUnavailable(f"image {url}: {type(e).__name__}") from e
+        if r.status_code == 404:
+            raise SupplierNotFound(f"image {url}: HTTP 404")
         if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/"):
             raise SupplierError(f"image {url}: HTTP {r.status_code}")
         return r.content

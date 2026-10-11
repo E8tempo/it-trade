@@ -19,12 +19,13 @@ def synthetic_photo(w: int, h: int, seed: int = 0) -> np.ndarray:
     return np.clip(img, 0, 255).astype(np.uint8)
 
 
-def apply_watermark(rm: WatermarkRemover, rgb: np.ndarray, det: Detection) -> np.ndarray:
+def apply_watermark(rm: WatermarkRemover, rgb: np.ndarray, det: Detection, color: float | None = None) -> np.ndarray:
+    color = rm.color if color is None else color
     h, w = rgb.shape[:2]
     x, y, a = rm.alpha_region(det, w, h)
     out = rgb.astype(np.float32)
     region = out[y : y + a.shape[0], x : x + a.shape[1]]
-    out[y : y + a.shape[0], x : x + a.shape[1]] = a[..., None] * rm.color + (1 - a[..., None]) * region
+    out[y : y + a.shape[0], x : x + a.shape[1]] = a[..., None] * color + (1 - a[..., None]) * region
     return np.clip(out + 0.5, 0, 255).astype(np.uint8)
 
 
@@ -89,3 +90,61 @@ def test_clean_photo_is_left_untouched(w, h):
     out, det = rm.remove(photo)
     assert det is None
     assert out is photo
+
+
+def test_double_watermark_is_removed_layer_by_layer():
+    rm = default_remover()
+    clean = synthetic_photo(800, 800, seed=4)
+    det = expected_detection(rm, "big", 800, 800)
+    once = apply_watermark(rm, clean, det)
+    twice = apply_watermark(rm, once, det)  # an already watermarked photo watermarked again
+
+    restored, found = rm.remove(twice, chroma_subsampling=(1, 1))
+    assert found is not None and found.layers == 2
+    assert np.abs(restored.astype(int) - clean.astype(int)).mean() < 0.5
+
+    # a single watermark is removed exactly once (no "negative" second pass)
+    restored, found = rm.remove(once, chroma_subsampling=(1, 1))
+    assert found is not None and found.layers == 1
+
+
+def test_small_watermark_on_300px_photo_and_triple_layer():
+    rm = default_remover()
+    clean = synthetic_photo(300, 300, seed=5)
+    det = expected_detection(rm, "small", 300, 300)
+    restored, found = rm.remove(apply_watermark(rm, clean, det), chroma_subsampling=(1, 1))
+    assert found is not None and found.template == "small"
+    assert np.abs(restored.astype(int) - clean.astype(int)).mean() < 0.5
+
+    clean = synthetic_photo(800, 800, seed=6)
+    det = expected_detection(rm, "big", 800, 800)
+    triple = clean
+    for _ in range(3):
+        triple = apply_watermark(rm, triple, det)
+    restored, found = rm.remove(triple, chroma_subsampling=(1, 1))
+    assert found is not None and found.layers == 3
+    assert np.abs(restored.astype(int) - clean.astype(int)).mean() < 1.0
+
+
+@pytest.mark.parametrize("color", [0.0, 12.0, 45.0])
+def test_watermark_colour_is_fitted_per_photo(color):
+    """Some photos carry a black or a slightly darker / lighter mark than the calibrated one."""
+    rm = default_remover()
+    clean = synthetic_photo(800, 800, seed=7)
+    det = expected_detection(rm, "big", 800, 800)
+    restored, found = rm.remove(apply_watermark(rm, clean, det, color), chroma_subsampling=(1, 1))
+    assert found is not None and found.layers == 1 and abs(found.color - color) < 3
+    assert np.abs(restored.astype(int) - clean.astype(int)).mean() < 0.5
+
+
+def test_stacked_grey_mark_over_dark_part_is_not_taken_for_black():
+    """On white a double black mark and a double grey one restore the same after clipping at 255,
+    but the black one would leave a light ghost over darker parts of the product."""
+    rm = default_remover()
+    clean = np.full((800, 800, 3), 255, np.uint8)
+    clean[:, 300:420] = 35  # a dark part of the product crossing the mark
+    det = expected_detection(rm, "big", 800, 800)
+    twice = apply_watermark(rm, apply_watermark(rm, clean, det), det)
+    restored, found = rm.remove(twice, chroma_subsampling=(1, 1))
+    assert found is not None and found.layers == 2 and found.color > 20
+    assert np.abs(restored[:, 300:420].astype(int) - 35).mean() < 1.0
