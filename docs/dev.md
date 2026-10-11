@@ -90,6 +90,8 @@ npm run dev
 
 Next проксирует `/api/*` и `/media/*` на бэкенд (rewrites в `next.config.ts`), поэтому для браузера API находится на том же адресе. Cookies авторизации работают без CORS. В проде то же самое делает Caddy.
 
+Админка: http://localhost:3000/admin. Вход — `ADMIN_EMAIL` и `ADMIN_PASSWORD` из `backend/.env`, этот администратор создаётся при старте API. После обновления кода примените миграции: `python -m alembic upgrade head` (из `backend/`).
+
 ## Авторизация (JWT)
 
 | Токен | Срок | Cookie |
