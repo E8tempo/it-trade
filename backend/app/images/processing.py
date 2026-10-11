@@ -72,9 +72,17 @@ def process_image(data: bytes, media_root: str, image_id: int) -> ProcessedImage
     return ProcessedImage(
         width=out.width,
         height=out.height,
-        wm_template=(det.template + ("-rot" if det.rotated else "")) if det else None,
+        wm_template=_variant_label(det) if det else None,
         wm_score=round(det.score, 4) if det else None,
     )
+
+
+def _variant_label(det) -> str:
+    """e.g. "big", "mid-rot", "big-x2", "small-black" (stored for diagnostics)."""
+    label = det.template + ("-rot" if det.rotated else "")
+    if det.color is not None and det.color < 10:
+        label += "-black"
+    return label + (f"-x{det.layers}" if det.layers > 1 else "")
 
 
 def delete_image_files(media_root: Path, image_id: int) -> None:
