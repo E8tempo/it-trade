@@ -1,5 +1,6 @@
 """Runtime settings edited from the admin panel, stored as JSON in `site_settings`."""
 
+from dataclasses import dataclass
 from decimal import ROUND_CEILING, Decimal
 
 from pydantic import BaseModel, Field
@@ -46,18 +47,40 @@ async def save_settings_obj(session: AsyncSession, obj: BaseModel) -> None:
         session.add(SiteSetting(key=key, value=value))
 
 
-def retail_price(supplier_price: Decimal, rrp: Decimal | None, category_path: str | None, s: PricingSettings) -> Decimal:
-    """`category_path` is the materialized path "/root/.../leaf/" - the nearest override wins."""
-    pct = s.markup_percent
+@dataclass(frozen=True)
+class PriceBreakdown:
+    """Every step of `retail_price`, for the admin panel's calculator."""
+
+    markup_percent: Decimal
+    markup_category: int | None  # category whose markup applied, None for the default one
+    by_markup: Decimal  # supplier price * (1 + markup / 100)
+    floor: Decimal  # supplier price + minimal markup in roubles
+    rrp_used: bool
+    before_rounding: Decimal
+    price: Decimal
+
+
+def price_breakdown(
+    supplier_price: Decimal, rrp: Decimal | None, category_path: str | None, s: PricingSettings
+) -> PriceBreakdown:
+    """`category_path` is the materialized path "/root/.../leaf/" - the nearest category markup wins."""
+    pct, source = s.markup_percent, None
     if category_path and s.category_markups:
         for cid in reversed(category_path.strip("/").split("/")):
             if cid and int(cid) in s.category_markups:
-                pct = s.category_markups[int(cid)]
+                pct, source = s.category_markups[int(cid)], int(cid)
                 break
-    price = supplier_price * (1 + pct / 100)
-    price = max(price, supplier_price + s.min_markup)
-    if s.use_rrp and rrp and rrp >= supplier_price + s.min_markup:
+    by_markup = supplier_price * (1 + pct / 100)
+    floor = supplier_price + s.min_markup
+    price = max(by_markup, floor)
+    rrp_used = bool(s.use_rrp and rrp and rrp >= floor)
+    if rrp_used:
         price = rrp
     step = Decimal(s.round_to)
-    return ((price / step).to_integral_value(rounding=ROUND_CEILING) * step).quantize(Decimal("0.01"))
+    rounded = ((price / step).to_integral_value(rounding=ROUND_CEILING) * step).quantize(Decimal("0.01"))
+    return PriceBreakdown(pct, source, by_markup, floor, rrp_used, price, rounded)
+
+
+def retail_price(supplier_price: Decimal, rrp: Decimal | None, category_path: str | None, s: PricingSettings) -> Decimal:
+    return price_breakdown(supplier_price, rrp, category_path, s).price
 

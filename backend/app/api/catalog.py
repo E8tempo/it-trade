@@ -106,7 +106,7 @@ def _escape_like(s: str) -> str:
 def _filtered(
     q: str | None, category: int | None, category_path: str | None, vendors: list[str], in_stock: bool
 ) -> Select:
-    stmt = select(Product).where(Product.is_active)
+    stmt = select(Product).where(Product.is_active, ~Product.is_hidden)
     if in_stock:
         stmt = stmt.where(Product.in_stock)
     if category_path:
@@ -196,6 +196,13 @@ _facet_cache: dict[tuple, tuple[float, tuple[list[VendorFacet], float | None, fl
 FACET_TTL = 300.0
 
 
+def clear_caches() -> None:
+    """Drop the category tree and facet caches of this process (admin changed prices or visibility)."""
+    global _tree_cache
+    _tree_cache = None
+    _facet_cache.clear()
+
+
 async def _facets(
     session: AsyncSession, q: str | None, category: int | None, path: str | None, in_stock: bool
 ) -> tuple[list[VendorFacet], float | None, float | None]:
@@ -223,7 +230,7 @@ async def _facets(
 @router.get("/products/{sku}", response_model=ProductDetail)
 async def product_detail(sku: int, session: Session):
     p = await session.get(Product, sku)
-    if not p or not p.is_active:
+    if not p or not p.is_active or p.is_hidden:
         raise HTTPException(404, "Product not found")
     images = (
         await session.scalars(
