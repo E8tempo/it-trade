@@ -128,3 +128,32 @@
     @apply font-sans;
   }
 }
+/* Page container: 1280px max, 16px gutters on phones */
+@utility container-shop {
+  margin-inline: auto;
+  width: 100%;
+  max-width: 80rem;
+  padding-inline: 1rem;
+  @media (width >= 40rem) {
+    padding-inline: 1.5rem;
+  }
+}
+
+/* Horizontal rails (thumbnails, product carousels) */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+}
