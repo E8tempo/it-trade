@@ -28,7 +28,8 @@ function refreshSession(): Promise<boolean> {
  */
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  // JSON by default; FormData gets its multipart boundary from the browser
+  if (init.body && !(init.body instanceof FormData) && !headers.has("content-type")) headers.set("content-type", "application/json");
 
   let res = await fetch(path, { ...init, headers });
   if (res.status === 401 && !path.startsWith("/api/auth/") && (await refreshSession())) {

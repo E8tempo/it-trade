@@ -2,8 +2,6 @@ import type { Metadata, Viewport } from "next";
 import { Geist_Mono, Inter } from "next/font/google";
 import { cn } from "@/lib/utils";
 
-import { SiteFooter } from "@/components/site/footer";
-import { SiteHeader } from "@/components/site/header";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SITE_DESCRIPTION, SITE_NAME } from "@/lib/site";
 
@@ -25,11 +23,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="ru" className={cn("h-full antialiased", inter.variable, geistMono.variable)}>
       <body className="flex min-h-full flex-col">
-        <TooltipProvider>
-          <SiteHeader />
-          <main className="flex-1">{children}</main>
-          <SiteFooter />
-        </TooltipProvider>
+        <TooltipProvider>{children}</TooltipProvider>
       </body>
     </html>
   );
