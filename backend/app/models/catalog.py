@@ -121,6 +121,7 @@ class ProductImage(Base):
     height: Mapped[int | None]
     wm_template: Mapped[str | None] = mapped_column(String(32))  # which watermark variant was removed
     wm_score: Mapped[float | None]  # detection confidence
+    duplicate_of: Mapped[int | None]  # a larger copy of this photo shown instead, see images/gallery.py
     processed_at: Mapped[datetime | None]
 
     product: Mapped[Product] = relationship(back_populates="images", foreign_keys=[sku])

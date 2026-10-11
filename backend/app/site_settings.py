@@ -26,6 +26,9 @@ class ShopSettings(BaseModel):
     address: str = ""
     working_hours: str = ""
     show_out_of_stock: bool = False
+    # product page gallery, see app/images/gallery.py
+    gallery_min_side: int = Field(400, ge=0, description="Secondary photos smaller than this on the longer side are hidden, px")
+    gallery_dedupe: bool = Field(True, description="Show one of near-identical photos (re-uploads, a slide in several languages)")
 
 
 SETTINGS: dict[str, type[BaseModel]] = {"pricing": PricingSettings, "shop": ShopSettings}

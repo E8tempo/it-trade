@@ -17,6 +17,7 @@ from app.api.schemas import (
     VendorFacet,
 )
 from app.db import get_session
+from app.images.gallery import gallery
 from app.models import Category, Product, ProductImage
 from app.models.catalog import VISIBLE_STATUSES, ImageStatus
 from app.site_settings import ShopSettings, get_settings_obj
@@ -239,6 +240,8 @@ async def product_detail(sku: int, session: Session):
             .order_by(ProductImage.position)
         )
     ).all()
+    shop = await get_settings_obj(session, ShopSettings)
+    images = gallery(images, shop.gallery_min_side, shop.gallery_dedupe)
     cat = await session.get(Category, p.category_id) if p.category_id else None
     card = ProductCard.of(p, images[0] if images else None)
     return ProductDetail(

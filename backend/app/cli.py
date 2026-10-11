@@ -6,6 +6,7 @@
     python -m app.cli process-images [N]                         process N pending images in the foreground
     python -m app.cli reprice                                    recompute retail prices
     python -m app.cli requeue-images [VARIANT]                   reprocess ready images (e.g. "small") after calibration
+    python -m app.cli dedupe-images                              find copies among the processed photos of every product
     python -m app.cli watermark-test IN.jpg OUT.jpg              remove the watermark from a local file
     python -m app.cli watermark-sample DIR [N]                   download N random supplier originals into DIR
     python -m app.cli watermark-calibrate DIR                    rebuild watermark templates from DIR/*.jpg
@@ -91,6 +92,25 @@ async def _requeue(variant: str | None) -> None:
     print(res.rowcount, "images queued")
 
 
+async def _dedupe_images() -> None:
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import ProductImage
+    from app.models.catalog import VISIBLE_STATUSES
+    from app.sync.images import refresh_copies
+
+    async with SessionLocal() as session:
+        skus = (await session.scalars(select(ProductImage.sku).where(ProductImage.status.in_(VISIBLE_STATUSES)).distinct())).all()
+        hidden = 0
+        for k, sku in enumerate(skus, 1):
+            hidden += await refresh_copies(session, sku)
+            if k % 200 == 0:
+                await session.commit()
+        await session.commit()
+    print(f"{len(skus)} products checked, {hidden} photos hidden as copies")
+
+
 def _watermark_test(src: Path, dst: Path) -> None:
     import numpy as np
     from PIL import Image
@@ -116,6 +136,7 @@ def main() -> None:
     sub.add_parser("process-images").add_argument("n", type=int, nargs="?", default=50)
     sub.add_parser("reprice")
     sub.add_parser("requeue-images").add_argument("variant", nargs="?", choices=["big", "mid", "small", "tiny"])
+    sub.add_parser("dedupe-images")
     wt = sub.add_parser("watermark-test")
     wt.add_argument("src", type=Path)
     wt.add_argument("dst", type=Path)
@@ -150,6 +171,8 @@ def main() -> None:
             print(asyncio.run(reprice_all()), "products repriced")
         case "requeue-images":
             asyncio.run(_requeue(a.variant))
+        case "dedupe-images":
+            asyncio.run(_dedupe_images())
         case "watermark-test":
             _watermark_test(a.src, a.dst)
         case "watermark-sample":
