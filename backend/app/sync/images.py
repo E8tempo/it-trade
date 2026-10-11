@@ -5,15 +5,20 @@ import logging
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from datetime import timedelta
+from pathlib import Path
 
+import numpy as np
+from PIL import Image
 from sqlalchemy import case, delete, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import SessionLocal
-from app.images.processing import delete_image_files, process_image
+from app.images.gallery import copies, thumbnail
+from app.images.processing import delete_image_files, image_path, process_image
 from app.models import Product, ProductImage
 from app.models.base import utcnow
-from app.models.catalog import ImageStatus
+from app.models.catalog import VISIBLE_STATUSES, ImageStatus
 from app.supplier.client import SupplierClient, SupplierError, SupplierNotFound, SupplierUnavailable
 
 log = logging.getLogger(__name__)
@@ -178,5 +183,35 @@ async def process_one(client: SupplierClient, pool: ProcessPoolExecutor | None, 
                 processed_at=utcnow(),
             )
         )
+        if (sku := await session.scalar(select(ProductImage.sku).where(ProductImage.id == image_id))) is not None:
+            await refresh_copies(session, sku)
         await session.commit()
     return True
+
+
+async def refresh_copies(session: AsyncSession, sku: int) -> int:
+    """Links the copies among a product's processed photos to the one shown instead (see
+    app/images/gallery.py). Returns how many photos are hidden as copies."""
+    photos = (
+        await session.scalars(
+            select(ProductImage)
+            .where(ProductImage.sku == sku, ProductImage.status.in_(VISIBLE_STATUSES), ProductImage.width.is_not(None))
+            .order_by(ProductImage.position)
+        )
+    ).all()
+    thumbs = await asyncio.to_thread(_thumbnails, get_settings().media_root, [p.id for p in photos])
+    links = copies([(p, thumbs[p.id]) for p in photos if p.id in thumbs])
+    for p in photos:
+        p.duplicate_of = links.get(p.id)
+    return sum(1 for kept in links.values() if kept is not None)
+
+
+def _thumbnails(media_root: Path, ids: list[int]) -> dict[int, np.ndarray]:
+    out = {}
+    for image_id in ids:
+        try:
+            with Image.open(image_path(media_root, image_id, "sm")) as im:
+                out[image_id] = thumbnail(im)
+        except OSError:  # the files are not written yet or were removed
+            continue
+    return out

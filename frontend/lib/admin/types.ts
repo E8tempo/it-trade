@@ -92,6 +92,8 @@ export type ShopSettings = {
   address: string;
   working_hours: string;
   show_out_of_stock: boolean;
+  gallery_min_side: number;
+  gallery_dedupe: boolean;
 };
 
 export type AdminCategory = {
@@ -180,6 +182,7 @@ export type LabResult = {
   fit?: {
     pixels: number;
     fallback: boolean;
+    switched: [number, number] | null;
     grey: number;
     candidates: { layers: number; shared: boolean; colours: number[]; error: number; plausible: boolean; chosen: boolean }[];
   };

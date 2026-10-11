@@ -64,6 +64,8 @@ def estimates(rm: WatermarkRemover, rgb: np.ndarray, det: Detection) -> tuple[np
     _, removed = rm.remove(rgb, det)
     if removed is None or removed.layers != 1 or abs((removed.color or 0) - rm.color) > COLOUR_TOLERANCE:
         return None
+    if removed.dx or removed.dy:  # resampled after watermarking: the strokes are blurred
+        return None
     t = rm.template(det.template).alpha
     th, tw = t.shape
     x, y = removed.x, removed.y  # the removal may have moved the detection by a pixel

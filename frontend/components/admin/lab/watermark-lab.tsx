@@ -244,6 +244,12 @@ function Result({ result: r, source }: { result: LabResult; source: string }) {
                 отличаются от фона рядом, в уровнях яркости. Более сложная модель выбирается, только если она на 15% точнее. Цвета
                 отдельных слоёв могут быть любыми, но вся стопка слоёв должна давать правдоподобный серый.
               </p>
+              {r.fit.switched && (
+                <p className="mb-3 text-sm">
+                  Модель с наименьшей ошибкой на ровном фоне оставляла знак вдоль штрихов (k = {fmt(r.fit.switched[0], 3)}), поэтому взята
+                  другая: после неё k = {fmt(r.fit.switched[1], 3)}.
+                </p>
+              )}
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>

@@ -24,13 +24,17 @@ How the supplier draws it (measured on samples):
     smooth background, with the background B taken from the neighbouring pixels. Of the
     layer counts allowed by k, the one that restores those pixels best wins. Layers may get
     different colours as long as the stack as a whole stays a plausible grey: that also
-    absorbs layers whose shapes differ a little. The error is measured on the restored
+    absorbs layers whose shapes differ a little. When the chosen model still leaves the mark
+    along the strokes (the smooth pixels can lie on one dark part of the product only), a
+    candidate that removes it takes over. The error is measured on the restored
     pixels, not on the watermarked ones: on white an over-strong model is clipped at 255
     and would look perfect there while leaving a light ghost over darker parts of the
     product;
   * strong product edges along the strokes can pull the detection 1 px off the true
     place, which leaves the letters embossed; the neighbouring placements are compared by
-    the edge energy of the restored strokes, and the clearly better one is used;
+    the edge energy of the restored strokes, and the clearly better one is used. A photo
+    resampled after watermarking can carry the mark between two pixels, so half-pixel
+    shifts of the best placement are tried the same way;
   * JPEG stores chroma at half resolution and smooths it further, so chroma is restored
     with the alpha averaged over the 2x2 blocks and slightly blurred: the sharp alpha
     would leave coloured fringes, an unblurred one more saturated strokes;
@@ -68,6 +72,11 @@ SEARCH_RADIUS = 1  # px around the expected (centred) position
 # when it cuts the edge energy of the restored strokes by at least 1 - REFINE_GAIN; a misplaced
 # mark loses 30..40%, a correct one has a sharp minimum (neighbours ~2x higher).
 REFINE_GAIN = 0.85
+# A photo resampled after watermarking can carry the mark between two pixels (1 of ~720 sample
+# photos, the 801 px wide 2836874): the half-pixel placements around the best one replace it when
+# they cut the edge energy by at least 1 - SUBPIXEL_GAIN. That photo: 14%; on all the others a
+# half-pixel shift is worse (1.7x in the median) or at most 8% better.
+SUBPIXEL_GAIN = 0.9
 # Measured on ~800 samples: watermarked p1 corr=0.067 / k=0.77..1.3, clean photos p95 corr=0.05.
 # A strong correlation is trusted with a wider k range: on dark photos (background ~ W) the
 # expected gradient G is tiny and k gets noisy.
@@ -97,6 +106,12 @@ FIT_GAIN = 0.85  # more layers or per-layer colours only if they cut the restora
 # every opacity, a fit outside means a wrong layer count. Layer colours on their own may leave it:
 # a double mark whose layers differ slightly in shape fits as e.g. [-92, 95] (2 of ~700 photos).
 COLOUR_RANGE = (-25.0, 85.0)
+# The colour fit only sees strokes over smooth background. When the fitted model still leaves a clear
+# mark along all the strokes (strength |k| above LEFT_MAX after the removal: median 0.011, p99 0.3),
+# the plausible candidate leaving at most a third of it wins, if its fit error is at most LEFT_ERROR
+# times the chosen one's. On ~720 photos this changes one: a black layer fitted on a dark bag left the
+# letters over a light label (k 0.195), two grey layers leave 0.031.
+LEFT_MAX, LEFT_ERROR = 0.15, 2.0
 CHROMA_BLUR = 0.8  # px, measured on double marks over colourful backgrounds
 # Final cleanup of plain surfaces: weight 1 where the surroundings (non-stroke pixels in a
 # PLAIN_WINDOWS square) vary by at most PLAIN_STD[0] luma levels, 0 from PLAIN_STD[1] on. The
@@ -129,6 +144,8 @@ class Detection:
     rotated: bool = False  # found on the image rotated by 90 degrees counter-clockwise
     layers: int = 1  # how many times the watermark was found stacked at this place (set by remove)
     color: float | None = None  # effective colour of the removed layers at full stroke opacity (set by remove)
+    dx: float = 0.0  # sub-pixel shift of the template from (x, y), same frame (set by remove)
+    dy: float = 0.0
 
 
 def _grad(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -185,6 +202,7 @@ class WatermarkRemover:
     def __init__(self, alphas: dict[str, np.ndarray], color: float):
         self.color = float(color)
         self.templates = [_make_template(name, a) for name, a in alphas.items()]
+        self._shifted: dict[tuple[str, float, float], np.ndarray] = {}
 
     @classmethod
     def from_file(cls, path: Path = DATA_FILE) -> "WatermarkRemover":
@@ -287,11 +305,28 @@ class WatermarkRemover:
     def placement(self, det: Detection, w: int) -> tuple[int, int, np.ndarray]:
         """(x, y, alpha) of the whole watermark in the original (unrotated) image of width w;
         x, y can be negative and the alpha can reach past the image."""
-        t = self.template(det.template)
+        a = self._shifted_alpha(det.template, det.dx, det.dy)
         if not det.rotated:
-            return det.x, det.y, t.alpha
+            return det.x, det.y, a
         # rot90(img, 1)[i, j] == img[j, w - 1 - i]
-        return w - det.y - t.alpha.shape[0], det.x, np.rot90(t.alpha, -1)
+        return w - det.y - a.shape[0], det.x, np.rot90(a, -1)
+
+    def _shifted_alpha(self, name: str, dx: float, dy: float) -> np.ndarray:
+        """Template alpha moved by a fraction of a pixel (bilinear), cached. The templates have
+        empty borders, so the array keeps its size."""
+        alpha = self.template(name).alpha
+        if not (dx or dy):
+            return alpha
+        key = (name, dx, dy)
+        if key not in self._shifted:
+            shift = np.float32([[1, 0, dx], [0, 1, dy]])
+            self._shifted[key] = cv2.warpAffine(alpha, shift, alpha.shape[::-1], flags=cv2.INTER_LINEAR)
+        return self._shifted[key]
+
+    def _origin(self, det: Detection, w: int) -> tuple[float, float]:
+        """Top-left of the template in the original image, sub-pixel shift included."""
+        x, y, _ = self.placement(replace(det, dx=0.0, dy=0.0), w)
+        return (x + det.dx, y + det.dy) if not det.rotated else (x - det.dy, y + det.dx)
 
     def alpha_region(self, det: Detection, w: int, h: int) -> tuple[int, int, np.ndarray]:
         """(x, y, alpha) of the part of the watermark inside the original image of size w x h."""
@@ -303,10 +338,15 @@ class WatermarkRemover:
 
     def residual(self, rgb: np.ndarray, det: Detection, color: float | None = None) -> float:
         """Watermark strength k left at the detected place."""
-        y = luma(rgb)
-        if det.rotated:
-            y = np.ascontiguousarray(np.rot90(y, 1))
-        return self.match(y, self.template(det.template), det.x, det.y, color)[1]
+        H, W = rgb.shape[:2]
+        x, y, a = self.placement(replace(det, dx=0.0, dy=0.0), W)
+        x0, y0, x1, y1 = max(0, x), max(0, y), min(W, x + a.shape[1]), min(H, y + a.shape[0])
+        crop = luma(rgb[y0:y1, x0:x1])  # only the watermark's part of the image
+        t = self.template(det.template)
+        if not det.rotated:
+            return self.match(crop, t, det.x - x0, det.y - y0, color)[1]
+        # rot90(img, 1)[i, j] == img[j, w - 1 - i]: the crop turns into rows W - x1 .. W - x0, columns y0 .. y1
+        return self.match(np.ascontiguousarray(np.rot90(crop, 1)), t, det.x - y0, det.y - (W - x1), color)[1]
 
     def remove(
         self,
@@ -324,24 +364,56 @@ class WatermarkRemover:
         det = det or self.detect(rgb)
         if det is None:
             return rgb, None
-        fit: list[dict] | None = [] if trace is not None else None
+        fit: list[dict] = []
         colours = self._fit_colours(rgb, det, fit)
         moved = self._refine(rgb, det, colours or [self.color] * int(np.clip(round(det.strength), 1, MAX_LAYERS)))
         if moved is not det:
             if trace is not None:
-                trace["moved"] = [moved.x - det.x, moved.y - det.y]
-            det, fit = moved, [] if trace is not None else None
+                trace["moved"] = [moved.x + moved.dx - det.x, moved.y + moved.dy - det.y]
+            det, fit = moved, []
             colours = self._fit_colours(rgb, det, fit)
         if trace is not None:
             trace.update(fit=fit, fallback=colours is None)
-        colours = colours or [self.color] * self._count_layers(rgb, det, chroma_subsampling)
-        out = self._clean_plain(rgb, self._invert(rgb, det, chroma_subsampling, colours), det, trace)
+        if colours is None:
+            colours = [self.color] * self._count_layers(rgb, det, chroma_subsampling)
+            restored = self._invert(rgb, det, chroma_subsampling, colours)
+        else:
+            restored, colours = self._least_left(rgb, det, chroma_subsampling, fit, trace)
+        out = self._clean_plain(rgb, restored, det, trace)
         a_max = float(self.template(det.template).alpha.max())
         return out, replace(det, layers=len(colours), color=float(_effective_colour(colours, a_max)))
 
+    def _least_left(
+        self, rgb: np.ndarray, det: Detection, chroma_subsampling: tuple[int, int], fit: list[dict], trace: dict | None
+    ) -> tuple[np.ndarray, list[float]]:
+        """Inversion with the fitted model, or with another plausible candidate of the fit when the
+        fitted one still leaves a clear mark along the strokes (see LEFT_MAX)."""
+        chosen = next(c for c in fit[1:] if c.get("chosen"))
+        restored = self._invert(rgb, det, chroma_subsampling, chosen["colours"])
+        left = abs(self.residual(restored, det))
+        if left <= LEFT_MAX:
+            return restored, chosen["colours"]
+        best: tuple[float, dict, np.ndarray] | None = None
+        for c in fit[1:]:
+            if c is chosen or not c["plausible"] or c["error"] > LEFT_ERROR * chosen["error"]:
+                continue
+            candidate = self._invert(rgb, det, chroma_subsampling, c["colours"])
+            k = abs(self.residual(candidate, det))
+            if k <= left / 3 and (best is None or k < best[0]):
+                best = (k, c, candidate)
+        if best is None:
+            return restored, chosen["colours"]
+        chosen["chosen"], best[1]["chosen"] = False, True
+        if trace is not None:
+            trace["switched"] = [left, best[0]]
+        return best[2], best[1]["colours"]
+
     def _refine(self, rgb: np.ndarray, det: Detection, colours: list[float]) -> Detection:
-        """The detection or a neighbouring placement, whichever restores the strokes with clearly less
-        edge energy (median gradient magnitude of the restored luma along the stroke edges)."""
+        """The detection, a placement 1 px away or half a pixel from the best of those, whichever
+        restores the strokes with clearly less edge energy (median gradient magnitude of the
+        restored luma along the stroke edges)."""
+        if det.dx or det.dy:
+            return det
         H, W = rgb.shape[:2]
         X, Y, alpha = self.placement(det, W)
         x0, y0 = max(0, X - 1), max(0, Y - 1)
@@ -349,12 +421,14 @@ class WatermarkRemover:
         if x1 - x0 < 3 or y1 - y0 < 3:
             return det
         J = luma(rgb[y0:y1, x0:x1])
-        # g, h of the whole template with a 2 px margin; a placement moved by up to 1 px is a slice
-        pad = np.pad(alpha, 2)
+        # g, h of the whole template with a 3 px margin: moved by whole pixels the template is a
+        # slice of them, moved by half a pixel the mean of the two (four) neighbouring slices
+        pad = np.pad(alpha, 3)
         g, h = _blend(pad, colours)
 
-        def at(v: np.ndarray, x: int, y: int) -> np.ndarray:
-            return v[y0 - y + 2 : y1 - y + 2, x0 - x + 2 : x1 - x + 2]
+        def at(v: np.ndarray, x: float, y: float) -> np.ndarray:
+            xs, ys = {math.floor(x), math.ceil(x)}, {math.floor(y), math.ceil(y)}
+            return sum(v[y0 - j + 3 : y1 - j + 3, x0 - i + 3 : x1 - i + 3] for j in ys for i in xs) / (len(xs) * len(ys))
 
         def gradient(v: np.ndarray) -> np.ndarray:
             return cv2.magnitude(cv2.Sobel(v, cv2.CV_32F, 1, 0), cv2.Sobel(v, cv2.CV_32F, 0, 1))
@@ -362,13 +436,20 @@ class WatermarkRemover:
         edges = np.flatnonzero(cv2.dilate((gradient(at(pad, X, Y)) > 0.1).astype(np.uint8), np.ones((5, 5), np.uint8)))
         if not edges.size:
             return det
-        placements = [replace(det, x=det.x + dx, y=det.y + dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1)]
-        energy = []
-        for p in placements:
-            x, y, _ = self.placement(p, W)
-            energy.append(float(np.median(gradient((J - at(h, x, y)) / at(g, x, y)).ravel()[edges])))
-        best = int(np.argmin(energy))
-        return placements[best] if energy[best] < REFINE_GAIN * energy[4] else det
+
+        def best_of(candidates: list[Detection], gain: float, current: tuple[Detection, float]) -> tuple[Detection, float]:
+            energy = []
+            for p in candidates:
+                x, y = self._origin(p, W)
+                energy.append(float(np.median(gradient((J - at(h, x, y)) / at(g, x, y)).ravel()[edges])))
+            i = int(np.argmin(energy))
+            return (candidates[i], energy[i]) if energy[i] < gain * current[1] else current
+
+        steps = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+        best = best_of([det], 1.0, (det, math.inf))
+        best = best_of([replace(det, x=det.x + i, y=det.y + j) for i, j in steps], REFINE_GAIN, best)
+        best = best_of([replace(best[0], dx=i / 2, dy=j / 2) for i, j in steps], SUBPIXEL_GAIN, best)
+        return best[0]
 
     def _clean_plain(self, rgb: np.ndarray, out: np.ndarray, det: Detection, trace: dict | None = None) -> np.ndarray:
         """Pulls the restored luma under the strokes to the background inpainted from the

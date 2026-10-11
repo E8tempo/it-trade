@@ -99,6 +99,38 @@ async def test_reprocessing_a_stale_photo_bumps_its_version():
         assert (img.status, img.version) == ("ready", 2)
 
 
+async def test_copies_of_a_photo_are_linked_to_the_largest():
+    import io
+
+    from PIL import Image, ImageDraw
+
+    from app.sync.images import process_one
+
+    def jpeg(size: int, shape: str) -> bytes:
+        im = Image.new("RGB", (size, size), "white")
+        draw = ImageDraw.Draw(im)
+        if shape == "box":
+            draw.rectangle((size // 4, size // 5, size * 3 // 4, size * 4 // 5), fill=(30, 90, 160))
+        else:
+            draw.ellipse((size // 6, size // 3, size * 5 // 6, size * 2 // 3), fill=(200, 60, 20))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=90)
+        return buf.getvalue()
+
+    files = {"10.jpg": jpeg(400, "box"), "11.jpg": jpeg(800, "box"), "12.jpg": jpeg(800, "ellipse")}
+
+    class Supplier:
+        async def fetch_image(self, url, size="original"):
+            return files[url]
+
+    await apply_image_lists([7], [item(10, is_main=True), item(11), item(12)])
+    for iid in (10, 11, 12):
+        assert await process_one(Supplier(), None, iid, f"{iid}.jpg")
+    async with SessionLocal() as s:
+        rows = (await s.scalars(select(ProductImage).order_by(ProductImage.id))).all()
+        assert {r.id: r.duplicate_of for r in rows} == {10: 11, 11: None, 12: None}
+
+
 async def test_network_trouble_keeps_the_photo_queued():
     import pytest as _pytest
 

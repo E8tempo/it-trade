@@ -66,6 +66,28 @@ export function ShopSettingsForm({ settings }: { settings: ShopSettings }) {
             <span className="block text-muted-foreground">В каталоге и поиске, после товаров в наличии.</span>
           </span>
         </label>
+        <label className="flex items-start gap-3">
+          <Switch checked={value.gallery_dedupe} onCheckedChange={(v) => setValue({ ...value, gallery_dedupe: v })} className="mt-0.5" />
+          <span className="text-sm">
+            <span className="font-medium">Убирать повторы фото</span>
+            <span className="block text-muted-foreground">
+              Одно и то же фото в нескольких размерах или слайд на нескольких языках показывается один раз, самым крупным.
+            </span>
+          </span>
+        </label>
+        <Field label="Скрывать дополнительные фото меньше, px">
+          <Input
+            type="number"
+            min={0}
+            step={50}
+            value={value.gallery_min_side}
+            onChange={(e) => setValue({ ...value, gallery_min_side: Math.max(0, Math.round(Number(e.target.value) || 0)) })}
+            className="h-9 w-32"
+          />
+          <span className="mt-1.5 block text-sm text-muted-foreground">
+            По длинной стороне, на странице товара. Главное фото остаётся всегда; 0 — показывать все.
+          </span>
+        </Field>
         <Button type="submit" disabled={busy || !dirty}>
           {busy && <LoaderCircle className="animate-spin" />}
           Сохранить
