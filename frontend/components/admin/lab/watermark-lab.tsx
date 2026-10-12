@@ -157,8 +157,11 @@ function Result({ result: r, source }: { result: LabResult; source: string }) {
             <>
               <Fact label="Корреляция" value={fmt(d.score)} />
               <Fact label="Сила знака k" value={fmt(d.strength, 2)} />
-              <Fact label="Модель" value={`${d.layers} ${d.layers === 1 ? "слой" : "слоя"}, цвет ${fmt(d.color ?? 0, 1)}`} />
-              <Fact label="Осталось знака k" value={fmt(d.strength_left, 3)} />
+              <Fact
+                label="Модель"
+                value={`${d.layers} ${d.layers === 1 ? "слой" : "слоя"}${d.opacity !== 1 ? ` по ${fmt(d.opacity * 100, 0)}%` : ""}, цвет ${fmt(d.color ?? 0, 1)}`}
+              />
+              <Fact label="Осталось знака" value={`${fmt(d.left, 1)} из ${fmt(d.left_before, 0)}`} />
               <Fact
                 label="Положение"
                 value={d.moved ? `уточнено: сдвиг на (${d.moved.map((v) => (v > 0 ? `+${v}` : String(v))).join(", ")}) px` : "как нашёл детектор"}
@@ -232,31 +235,28 @@ function Result({ result: r, source }: { result: LabResult; source: string }) {
 
       {r.fit && (
         <Panel title="Подбор модели знака" action={<DocLink href="/admin/docs/watermark-removal#fit">как подбирается модель</DocLink>}>
-          {r.fit.fallback ? (
+          {r.fit.candidates.length <= 1 ? (
             <p className="text-sm text-muted-foreground">
-              Ровного фона под знаком слишком мало ({r.fit.pixels} px), цвет не подобрать: использован откалиброванный серый (
-              {fmt(r.fit.grey, 1)}), число слоёв — по остаточной силе знака.
+              Краёв штрихов внутри фото слишком мало ({r.fit.pixels} px), модель не подобрать: использован откалиброванный серый (
+              {fmt(r.fit.grey, 1)}).
             </p>
           ) : (
             <>
               <p className="mb-3 text-sm text-muted-foreground">
-                По {r.fit.pixels.toLocaleString("ru-RU")} пикселям штрихов на ровном фоне. Ошибка — насколько восстановленные пиксели
-                отличаются от фона рядом, в уровнях яркости. Более сложная модель выбирается, только если она на 15% точнее. Цвета
-                отдельных слоёв могут быть любыми, но вся стопка слоёв должна давать правдоподобный серый.
+                Цвета подобраны по {r.fit.pixels.toLocaleString("ru-RU")} пикселям краёв штрихов так, чтобы они стали такими же ровными, как
+                фото вокруг. «Осталось» — сколько знака модель оставляет вдоль штрихов, в уровнях яркости на единицу непрозрачности, отдельно
+                над тёмными и светлыми частями фото. Более сложная модель (другая непрозрачность, больше слоёв, свой цвет у слоя)
+                выбирается, только если оставляет заметно меньше. Цвета отдельных слоёв могут быть любыми, но вся стопка должна давать
+                правдоподобный серый.
               </p>
-              {r.fit.switched && (
-                <p className="mb-3 text-sm">
-                  Модель с наименьшей ошибкой на ровном фоне оставляла знак вдоль штрихов (k = {fmt(r.fit.switched[0], 3)}), поэтому взята
-                  другая: после неё k = {fmt(r.fit.switched[1], 3)}.
-                </p>
-              )}
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Слоёв</TableHead>
+                      <TableHead className="text-right">Непрозрачность</TableHead>
                       <TableHead>Цвета слоёв</TableHead>
-                      <TableHead className="text-right">Ошибка</TableHead>
+                      <TableHead className="text-right">Осталось</TableHead>
                       <TableHead>Итог</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -267,8 +267,9 @@ function Result({ result: r, source }: { result: LabResult; source: string }) {
                           {c.layers}
                           {c.layers > 1 && <span className="text-muted-foreground">{c.shared ? " (один цвет)" : " (свой цвет у слоя)"}</span>}
                         </TableCell>
+                        <TableCell className="text-right tabular-nums">{fmt(c.opacity * 100, 0)}%</TableCell>
                         <TableCell className="tabular-nums">{c.colours.map((v) => fmt(v, 1)).join(" / ")}</TableCell>
-                        <TableCell className="text-right tabular-nums">{fmt(c.error, 2)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{fmt(c.left, 1)}</TableCell>
                         <TableCell className={cn(!c.chosen && "text-muted-foreground")}>
                           {c.chosen ? "выбрана" : c.plausible ? "—" : "неправдоподобный цвет"}
                         </TableCell>

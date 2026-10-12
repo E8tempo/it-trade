@@ -59,22 +59,21 @@ def analyze(data: bytes) -> dict:
     a[ay - y0 : ay - y0 + alpha.shape[0], ax - x0 : ax - x0 + alpha.shape[1]] = alpha
     before, after = rgb[y0:y1, x0:x1], clean[y0:y1, x0:x1]
 
-    fit = trace.get("fit") or []
+    fit = trace.get("fit") or {}
     result["detection"] = {
         **_det(removed),
         "verdict": rm.verdict(det, w, h),
         "moved": trace.get("moved"),
         "box": [x0, y0, x1, y1],
         "template_size": list(rm.template(det.template).alpha.shape[::-1]),
-        "strength_left": rm.residual(clean, removed),
+        "left_before": rm.mark_left(rgb, removed),
+        "left": rm.mark_left(clean, removed),
     }
     result["plain"] = trace.get("plain", {"share": 0.0, "max": 0.0})
     result["fit"] = {
-        "pixels": fit[0]["pixels"] if fit else 0,
-        "fallback": trace.get("fallback", True),
-        "switched": trace.get("switched"),
+        "pixels": fit.get("pixels", 0),
         "grey": rm.color,
-        "candidates": [{**c, "chosen": c.get("chosen", False)} for c in fit[1:]],
+        "candidates": [{**c, "chosen": c.get("chosen", False)} for c in fit.get("candidates", [])],
     }
     result["images"].update(
         cleaned=_data_url(_preview(clean)),
@@ -95,6 +94,7 @@ def _det(d: Detection) -> dict:
         "score": d.score,
         "strength": d.strength,
         "layers": d.layers,
+        "opacity": d.opacity,
         "color": d.color,
     }
 

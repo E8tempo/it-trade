@@ -19,17 +19,19 @@ How the supplier draws it (measured on samples):
     encode. L layers of colours W_1..W_L blend as
         J = (1-a)^L * I + sum_l W_l * a * (1-a)^(L-l)
     and are inverted in one step. Each layer adds ~1 to the detection strength k;
-  * the colour varies between photos (some marks are near-black, it also absorbs small
-    opacity differences of the templates), so it is fitted per photo on the strokes over
-    smooth background, with the background B taken from the neighbouring pixels. Of the
-    layer counts allowed by k, the one that restores those pixels best wins. Layers may get
+  * the colour and the opacity vary between photos: most marks are the calibrated grey,
+    some are near-black and drawn ~10% fainter, and all differ a little from photo to
+    photo. So the model (layer count, opacity relative to the template, colours) is fitted
+    per photo. The restored luma is linear in the colours, and so is its gradient: the
+    colours are the ones that make the restored stroke edges as flat as the photo around
+    them, every edge pixel weighted by how smooth the photo is around it in that direction
+    (fabric, ribs or print count little). Over a uniform background a darker colour and a
+    lower opacity restore alike, only parts of different brightness under the mark tell
+    them apart; so of the candidates (one layer at a few opacities, more layers as allowed
+    by k) the one leaving the least mark wins, judged per brightness band of the photo
+    around the strokes, and a more complex one only by a clear margin. Layers may get
     different colours as long as the stack as a whole stays a plausible grey: that also
-    absorbs layers whose shapes differ a little. When the chosen model still leaves the mark
-    along the strokes (the smooth pixels can lie on one dark part of the product only), a
-    candidate that removes it takes over. The error is measured on the restored
-    pixels, not on the watermarked ones: on white an over-strong model is clipped at 255
-    and would look perfect there while leaving a light ghost over darker parts of the
-    product;
+    absorbs layers whose shapes differ a little;
   * strong product edges along the strokes can pull the detection 1 px off the true
     place, which leaves the letters embossed; the neighbouring placements are compared by
     the edge energy of the restored strokes, and the clearly better one is used. A photo
@@ -93,25 +95,28 @@ MAX_CLIPPED_ALPHA, CLIPPED_MIN_CORR = 0.25, 0.2
 # scaled to its widths up to corr 0.19, real tiny marks 0.29..0.96
 TINY_MIN_CORR = 0.25
 MAX_LAYERS = 3
-# Without enough smooth background to fit the colours, the calibrated grey is used and another
-# layer is added while at least this much watermark (k) is left, if that reduces |k| by
-# LAYER_MIN_GAIN: every real layer accounts for k ~1, while a pass over an already clean image
-# just flips the sign of a small JPEG-noise residual (0.5 -> -0.5).
-LAYER_MIN_RESIDUAL = 0.5
-LAYER_MIN_GAIN = 0.4
-BG_RADIUS, BG_MAX_STD = 6, 6.0  # local background estimate for the colour fit
-FIT_MIN_PIXELS = 100  # stroke pixels over smooth background needed to fit the colours
-FIT_GAIN = 0.85  # more layers or per-layer colours only if they cut the restoration error by 15%
+# Model fit (see _fit). The colours are fitted on the gradients of the stroke edges, each weighted by
+# the inverse covariance of the image gradient over the non-stroke pixels of a FIT_WINDOW square
+# around it, plus FIT_NOISE luma levels of JPEG noise amplified by the restoration.
+FIT_WINDOW, FIT_NOISE = 15, 1.5
+SOBEL_GAIN = 12.0  # variance of a 3x3 Sobel derivative of unit white noise
+# One layer is also tried at these opacities relative to the template: near-black marks are drawn
+# fainter (0.9 on photos with both black and white parts under the mark).
+OPACITIES = (0.85, 0.9, 0.95, 1.05, 1.1)
+# A more complex model (another opacity, more layers, per-layer colours) has to leave at least 15% and
+# FIT_MIN_DROP luma levels per unit of alpha less of the mark than the simpler one.
+FIT_GAIN, FIT_MIN_DROP = 0.85, 2.0
+# The mark left is measured on the strong template edges (|grad alpha| above LEFT_EDGE of its maximum)
+# whose surroundings are calm enough: the photo's own gradient there may swing the measurement by at
+# most LEFT_MAX_SPREAD levels per unit of alpha (the border of a black part right by the strokes
+# swings it by hundreds). It is measured separately in these bands of the photo's brightness around
+# the strokes; a band needs LEFT_MIN_SHARE of the pixels (and 30 at least) to count.
+LEFT_EDGE, LEFT_MAX_SPREAD = 0.4, 100.0
+LEFT_BANDS, LEFT_MIN_SHARE = (0, 40, 80, 130, 190, 256), 0.03
 # Plausible colours of the whole stack: its effective colour h / (1 - g) must stay in this range at
 # every opacity, a fit outside means a wrong layer count. Layer colours on their own may leave it:
 # a double mark whose layers differ slightly in shape fits as e.g. [-92, 95] (2 of ~700 photos).
 COLOUR_RANGE = (-25.0, 85.0)
-# The colour fit only sees strokes over smooth background. When the fitted model still leaves a clear
-# mark along all the strokes (strength |k| above LEFT_MAX after the removal: median 0.011, p99 0.3),
-# the plausible candidate leaving at most a third of it wins, if its fit error is at most LEFT_ERROR
-# times the chosen one's. On ~720 photos this changes one: a black layer fitted on a dark bag left the
-# letters over a light label (k 0.195), two grey layers leave 0.031.
-LEFT_MAX, LEFT_ERROR = 0.15, 2.0
 CHROMA_BLUR = 0.8  # px, measured on double marks over colourful backgrounds
 # Final cleanup of plain surfaces: weight 1 where the surroundings (non-stroke pixels in a
 # PLAIN_WINDOWS square) vary by at most PLAIN_STD[0] luma levels, 0 from PLAIN_STD[1] on. The
@@ -143,6 +148,7 @@ class Detection:
     strength: float  # projection coefficient k, ~1 for a real watermark
     rotated: bool = False  # found on the image rotated by 90 degrees counter-clockwise
     layers: int = 1  # how many times the watermark was found stacked at this place (set by remove)
+    opacity: float = 1.0  # of every layer relative to the template (set by remove)
     color: float | None = None  # effective colour of the removed layers at full stroke opacity (set by remove)
     dx: float = 0.0  # sub-pixel shift of the template from (x, y), same frame (set by remove)
     dy: float = 0.0
@@ -182,20 +188,6 @@ def _clipped(t: Template, ts: tuple[slice, slice]) -> float:
 def _box_sum(v: np.ndarray, size: int) -> np.ndarray:
     """Sum over the size x size square around every pixel, zero outside the array."""
     return cv2.boxFilter(v, -1, (size, size), normalize=False, borderType=cv2.BORDER_CONSTANT)
-
-
-def _local_background(J: np.ndarray, a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Per pixel: mean of the neighbouring non-stroke pixels, and where strokes lie on smooth background."""
-    bg = (a < 0.01).astype(np.float32)
-    k = 2 * BG_RADIUS + 1
-    n = cv2.boxFilter(bg, -1, (k, k), normalize=False)
-    s1 = cv2.boxFilter(J * bg, -1, (k, k), normalize=False)
-    s2 = cv2.boxFilter(J * J * bg, -1, (k, k), normalize=False)
-    with np.errstate(all="ignore"):
-        mean = s1 / n
-        std = np.sqrt(np.maximum(s2 / n - mean * mean, 0))
-    smooth = (a > 0.3) & (n >= k) & (std <= BG_MAX_STD)
-    return np.nan_to_num(mean), smooth
 
 
 class WatermarkRemover:
@@ -336,17 +328,22 @@ class WatermarkRemover:
         a = a[y0 - y : min(h, y + ah) - y, x0 - x : min(w, x + aw) - x]
         return x0, y0, np.ascontiguousarray(a)
 
-    def residual(self, rgb: np.ndarray, det: Detection, color: float | None = None) -> float:
-        """Watermark strength k left at the detected place."""
+    def region(self, rgb: np.ndarray, det: Detection, margin: int = 3) -> tuple[np.ndarray, np.ndarray]:
+        """Luma of the watermark's part of the image plus a margin, and the template alpha placed in it."""
         H, W = rgb.shape[:2]
-        x, y, a = self.placement(replace(det, dx=0.0, dy=0.0), W)
-        x0, y0, x1, y1 = max(0, x), max(0, y), min(W, x + a.shape[1]), min(H, y + a.shape[0])
-        crop = luma(rgb[y0:y1, x0:x1])  # only the watermark's part of the image
-        t = self.template(det.template)
-        if not det.rotated:
-            return self.match(crop, t, det.x - x0, det.y - y0, color)[1]
-        # rot90(img, 1)[i, j] == img[j, w - 1 - i]: the crop turns into rows W - x1 .. W - x0, columns y0 .. y1
-        return self.match(np.ascontiguousarray(np.rot90(crop, 1)), t, det.x - y0, det.y - (W - x1), color)[1]
+        ax, ay, a = self.alpha_region(det, W, H)
+        x0, y0 = max(0, ax - margin), max(0, ay - margin)
+        x1, y1 = min(W, ax + a.shape[1] + margin), min(H, ay + a.shape[0] + margin)
+        A = np.zeros((y1 - y0, x1 - x0), np.float32)
+        A[ay - y0 : ay - y0 + a.shape[0], ax - x0 : ax - x0 + a.shape[1]] = a
+        return luma(rgb[y0:y1, x0:x1]), A
+
+    def mark_left(self, rgb: np.ndarray, det: Detection) -> float:
+        """How much of the mark the image still has at the detected place, in luma levels per unit of
+        alpha (see _mark_left): ~0..3 on a clean result, tens where the letters still show."""
+        J, A = self.region(rgb, det)
+        a = A * det.opacity
+        return _mark_left(J, a, [], _surroundings(J, a))
 
     def remove(
         self,
@@ -358,57 +355,28 @@ class WatermarkRemover:
         """Returns (clean RGB uint8 image, detection). The image is returned as is if no watermark is found.
 
         `chroma_subsampling` = (sx, sy) of the source JPEG, (2, 2) for 4:2:0. `trace` (a dict) gets
-        the colour fit candidates, whether the calibrated grey had to be used instead, and what the
-        cleanup of plain surfaces changed.
+        the candidate models of the fit and what the cleanup of plain surfaces changed.
         """
         det = det or self.detect(rgb)
         if det is None:
             return rgb, None
-        fit: list[dict] = []
-        colours = self._fit_colours(rgb, det, fit)
-        moved = self._refine(rgb, det, colours or [self.color] * int(np.clip(round(det.strength), 1, MAX_LAYERS)))
+        fit: dict = {}
+        model = self._fit(rgb, det, fit)
+        moved = self._refine(rgb, det, model["colours"], model["opacity"])
         if moved is not det:
             if trace is not None:
                 trace["moved"] = [moved.x + moved.dx - det.x, moved.y + moved.dy - det.y]
-            det, fit = moved, []
-            colours = self._fit_colours(rgb, det, fit)
+            det, fit = moved, {}
+            model = self._fit(rgb, det, fit)
         if trace is not None:
-            trace.update(fit=fit, fallback=colours is None)
-        if colours is None:
-            colours = [self.color] * self._count_layers(rgb, det, chroma_subsampling)
-            restored = self._invert(rgb, det, chroma_subsampling, colours)
-        else:
-            restored, colours = self._least_left(rgb, det, chroma_subsampling, fit, trace)
+            trace["fit"] = fit
+        colours, opacity = model["colours"], model["opacity"]
+        restored = self._invert(rgb, det, chroma_subsampling, colours, opacity)
         out = self._clean_plain(rgb, restored, det, trace)
-        a_max = float(self.template(det.template).alpha.max())
-        return out, replace(det, layers=len(colours), color=float(_effective_colour(colours, a_max)))
+        a_max = opacity * float(self.template(det.template).alpha.max())
+        return out, replace(det, layers=len(colours), opacity=opacity, color=float(_effective_colour(colours, a_max)))
 
-    def _least_left(
-        self, rgb: np.ndarray, det: Detection, chroma_subsampling: tuple[int, int], fit: list[dict], trace: dict | None
-    ) -> tuple[np.ndarray, list[float]]:
-        """Inversion with the fitted model, or with another plausible candidate of the fit when the
-        fitted one still leaves a clear mark along the strokes (see LEFT_MAX)."""
-        chosen = next(c for c in fit[1:] if c.get("chosen"))
-        restored = self._invert(rgb, det, chroma_subsampling, chosen["colours"])
-        left = abs(self.residual(restored, det))
-        if left <= LEFT_MAX:
-            return restored, chosen["colours"]
-        best: tuple[float, dict, np.ndarray] | None = None
-        for c in fit[1:]:
-            if c is chosen or not c["plausible"] or c["error"] > LEFT_ERROR * chosen["error"]:
-                continue
-            candidate = self._invert(rgb, det, chroma_subsampling, c["colours"])
-            k = abs(self.residual(candidate, det))
-            if k <= left / 3 and (best is None or k < best[0]):
-                best = (k, c, candidate)
-        if best is None:
-            return restored, chosen["colours"]
-        chosen["chosen"], best[1]["chosen"] = False, True
-        if trace is not None:
-            trace["switched"] = [left, best[0]]
-        return best[2], best[1]["colours"]
-
-    def _refine(self, rgb: np.ndarray, det: Detection, colours: list[float]) -> Detection:
+    def _refine(self, rgb: np.ndarray, det: Detection, colours: list[float], opacity: float = 1.0) -> Detection:
         """The detection, a placement 1 px away or half a pixel from the best of those, whichever
         restores the strokes with clearly less edge energy (median gradient magnitude of the
         restored luma along the stroke edges)."""
@@ -424,7 +392,7 @@ class WatermarkRemover:
         # g, h of the whole template with a 3 px margin: moved by whole pixels the template is a
         # slice of them, moved by half a pixel the mean of the two (four) neighbouring slices
         pad = np.pad(alpha, 3)
-        g, h = _blend(pad, colours)
+        g, h = _blend(pad * opacity, colours)
 
         def at(v: np.ndarray, x: float, y: float) -> np.ndarray:
             xs, ys = {math.floor(x), math.ceil(x)}, {math.floor(y), math.ceil(y)}
@@ -504,59 +472,63 @@ class WatermarkRemover:
         result[y0:y1, x0:x1] = np.clip(region + shift[..., None] + 0.5, 0, 255).astype(np.uint8)
         return result
 
-    def _fit_colours(self, rgb: np.ndarray, det: Detection, trace: list[dict] | None = None) -> list[float] | None:
-        """Colour of every layer fitted on the strokes over smooth background, None without enough of it.
+    def _fit(self, rgb: np.ndarray, det: Detection, trace: dict | None = None) -> dict:
+        """Model of the mark at the detected place: {"layers", "shared", "opacity", "colours", "left"}.
 
-        Layer counts up to round(k) are tried, for two and more layers also with a colour per
-        layer; a more complex model has to cut the restoration error by 1 - FIT_GAIN.
-        Every candidate is appended to `trace` when it is given (the admin panel shows them).
+        Candidates, from the simplest: one layer at the template's opacity, one layer at the other
+        OPACITIES, then for every layer count allowed by k one colour for all layers and a colour per
+        layer. The colours of each are fitted by `_fit_layers`; the best plausible candidate of each step
+        replaces the model so far only if it leaves clearly less of the mark (FIT_GAIN, FIT_MIN_DROP).
+        `trace` gets the number of edge pixels and every candidate (the admin panel shows them).
         """
-        H, W = rgb.shape[:2]
-        ax, ay, a = self.alpha_region(det, W, H)
-        J = luma(rgb[ay : ay + a.shape[0], ax : ax + a.shape[1]])
-        background, smooth = _local_background(J, a)
-        if trace is not None:
-            trace.append({"pixels": int(smooth.sum())})
-        if smooth.sum() < FIT_MIN_PIXELS:
-            return None
-        a, J, B = a[smooth], J[smooth], background[smooth]
+        J, A = self.region(rgb, det)
+        gx, gy = _grad(A)
+        edges = cv2.dilate((cv2.magnitude(gx, gy) > 0.1).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        around = _surroundings(J, A)
+        a_max = float(A.max())
+        top = int(np.clip(math.floor(det.strength + 0.5), 1, MAX_LAYERS))
+        steps = [[(1, True, 1.0)], [(1, True, o) for o in OPACITIES]]
+        steps += [[(layers, shared, 1.0)] for layers in range(2, top + 1) for shared in (True, False)]
+        candidates: list[dict] = []
         best: dict | None = None
-        for layers in range(1, int(np.clip(math.floor(det.strength + 0.5), 1, MAX_LAYERS)) + 1):
-            for shared in (True, False) if layers > 1 else (True,):
-                colours = _fit_layers(a, J, B, layers, shared)
-                g, h = _blend(a, colours)
-                error = float(np.abs((J - g * B - h) / g).mean())  # restored minus background
-                candidate = {
-                    "layers": layers,
-                    "shared": shared,
-                    "colours": colours,
-                    "error": error,
-                    "plausible": _plausible(colours, float(a.max())),
-                }
-                if trace is not None:
-                    trace.append(candidate)
-                if candidate["plausible"] and (best is None or error < FIT_GAIN * best["error"]):
-                    best = candidate
-        if best is None:
-            return None
+        if edges.sum() >= 30:
+            for step in steps:
+                found = []
+                for layers, shared, opacity in step:
+                    colours = _fit_layers(J, A * opacity, edges, around, layers, shared)
+                    c = {
+                        "layers": layers,
+                        "shared": shared,
+                        "opacity": opacity,
+                        "colours": colours,
+                        "left": _mark_left(J, A * opacity, colours, around),
+                        "plausible": _plausible(colours, opacity * a_max),
+                    }
+                    candidates.append(c)
+                    if c["plausible"]:
+                        found.append(c)
+                if not found:
+                    continue
+                c = min(found, key=lambda c: c["left"])
+                if best is None or (c["left"] < FIT_GAIN * best["left"] and best["left"] - c["left"] > FIT_MIN_DROP):
+                    best = c
+        if best is None:  # (almost) no edges inside the image or nothing plausible: the calibrated grey
+            best = {"layers": 1, "shared": True, "opacity": 1.0, "colours": [self.color], "left": 0.0, "plausible": True}
+            candidates.append(best)
         best["chosen"] = True
-        return best["colours"]
-
-    def _count_layers(self, rgb: np.ndarray, det: Detection, chroma_subsampling: tuple[int, int]) -> int:
-        """Layers of the calibrated grey: added while the residual strength k clearly drops."""
-        left = self.residual(self._invert(rgb, det, chroma_subsampling, [self.color]), det)
-        layers = 1
-        while layers < MAX_LAYERS and left >= LAYER_MIN_RESIDUAL:
-            after = self.residual(self._invert(rgb, det, chroma_subsampling, [self.color] * (layers + 1)), det)
-            if abs(after) > left - LAYER_MIN_GAIN:
-                break
-            left, layers = after, layers + 1
-        return layers
+        if trace is not None:
+            trace.update(pixels=int(edges.sum()), candidates=candidates)
+        return best
 
     def _invert(
-        self, rgb: np.ndarray, det: Detection, chroma_subsampling: tuple[int, int], colours: list[float]
+        self,
+        rgb: np.ndarray,
+        det: Detection,
+        chroma_subsampling: tuple[int, int],
+        colours: list[float],
+        opacity: float = 1.0,
     ) -> np.ndarray:
-        """Inversion of len(colours) stacked layers at the detected place."""
+        """Inversion of len(colours) stacked layers of the given opacity at the detected place."""
         H, W = rgb.shape[:2]
         ax, ay, alpha = self.alpha_region(det, W, H)
         ah, aw = alpha.shape
@@ -567,7 +539,7 @@ class WatermarkRemover:
         rw, rh = x1 - x0, y1 - y0
         a = np.zeros((rh, rw), np.float32)
         a[ay - y0 : ay - y0 + ah, ax - x0 : ax - x0 + aw] = alpha
-        g, h = _blend(a, colours)
+        g, h = _blend(a * opacity, colours)
         if (sx, sy) != (1, 1):
             cw, ch = -(-rw // sx), -(-rh // sy)
             pad = np.ones((ch * sy, cw * sx), np.float32)
@@ -591,7 +563,7 @@ class WatermarkRemover:
 
 
 def _blend(a: np.ndarray, colours: list[float]) -> tuple[np.ndarray, np.ndarray]:
-    """(g, h) of J = g*I + h for len(colours) layers drawn in this order with alpha `a`."""
+    """(g, h) of J = g*I + h for len(colours) layers drawn in this order with alpha `a` (none: g = 1, h = 0)."""
     layers = len(colours)
     g = (1 - a) ** layers
     h = sum(c * a * (1 - a) ** (layers - i) for i, c in enumerate(colours, 1))
@@ -610,22 +582,89 @@ def _plausible(colours: list[float], a_max: float) -> bool:
     return COLOUR_RANGE[0] <= float(effective.min()) and float(effective.max()) <= COLOUR_RANGE[1]
 
 
-def _fit_layers(a: np.ndarray, J: np.ndarray, B: np.ndarray, layers: int, shared: bool) -> list[float]:
-    """Layer colours of J = g*B + h by least squares, iteratively down-weighting outliers (Huber)
-    such as stroke pixels whose neighbours misjudge the background."""
+def _surroundings(J: np.ndarray, a: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Per pixel, over the non-stroke pixels of the FIT_WINDOW square around it: the covariance
+    (xx, yy, xy) of the image gradient and the mean brightness."""
+    gx, gy = _grad(J)
+    bg = (a < 0.01).astype(np.float32)
+    n = np.maximum(_box_sum(bg, FIT_WINDOW), 1.0)
+    return tuple(_box_sum(v * bg, FIT_WINDOW) / n for v in (gx * gx, gy * gy, gx * gy, J))
+
+
+def _whitening(sxx: np.ndarray, syy: np.ndarray, sxy: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(p, q, r) of the inverse square root [[p, r], [r, q]] of every 2x2 covariance [[sxx, sxy], [sxy, syy]]:
+    sqrt(C) = (C + s*I) / t with s = sqrt(det C), t = sqrt(trace C + 2s)."""
+    s = np.sqrt(np.maximum(sxx * syy - sxy * sxy, 1e-9))
+    t = np.sqrt(sxx + syy + 2 * s)
+    norm = t / ((sxx + s) * (syy + s) - sxy * sxy)
+    return (syy + s) * norm, (sxx + s) * norm, -sxy * norm
+
+
+def _fit_layers(
+    J: np.ndarray, a: np.ndarray, edges: np.ndarray, around: tuple, layers: int, shared: bool
+) -> list[float]:
+    """Layer colours that make the restored stroke edges as flat as the image around them.
+
+    The restored luma (J - h) / g is linear in the colours, so is its gradient: J/g minus the colours
+    times the gradients of their coefficients in h/g. The gradient vectors on the edges are whitened by
+    the texture around them plus the amplified JPEG noise: a direction the photo itself varies in
+    (fabric, ribs, print) weighs little, a smooth surround a lot. The colours minimise the sum of the
+    whitened residual lengths (iteratively reweighted least squares), robust to product edges.
+    """
     g = (1 - a) ** layers
-    y = J - g * B
     if shared:  # all layers of one colour: h = W * (1 - g)
-        X = (1 - g)[:, None]
+        terms = [(1 - g) / g]
     else:
-        X = np.stack([a * (1 - a) ** (layers - i) for i in range(1, layers + 1)], 1)
-    w = np.ones_like(y)
-    for _ in range(6):
-        sw = np.sqrt(w)
-        beta = np.linalg.lstsq(X * sw[:, None], y * sw, rcond=None)[0]
-        r = np.abs(y - X @ beta)
-        w = np.minimum(1.0, 1.5 * (1.4826 * float(np.median(r)) + 1e-3) / np.maximum(r, 1e-6))
+        terms = [a * (1 - a) ** (layers - i) / g for i in range(1, layers + 1)]
+    noise = SOBEL_GAIN * FIT_NOISE**2 / (g * g)
+    sxx, syy, sxy, _ = around
+    p, q, r = _whitening((sxx + noise)[edges], (syy + noise)[edges], sxy[edges])
+
+    def whitened(v: np.ndarray) -> np.ndarray:
+        vx, vy = (d[edges] for d in _grad(v))
+        return np.concatenate([p * vx + r * vy, r * vx + q * vy])
+
+    y = whitened(J / g).astype(np.float64)
+    X = np.stack([whitened(t) for t in terms], 1).astype(np.float64)
+    n = y.size // 2
+    w = np.ones(n)
+    beta = np.zeros(X.shape[1])
+    for _ in range(10):
+        ww = np.concatenate([w, w])
+        beta = np.linalg.lstsq(X.T @ (X * ww[:, None]), X.T @ (y * ww), rcond=None)[0]  # weighted normal equations
+        res = y - X @ beta
+        w = 1.0 / np.maximum(np.hypot(res[:n], res[n:]), 0.3)
     return [float(c) for c in (np.repeat(beta, layers) if shared else beta)]
+
+
+def _mark_left(J: np.ndarray, a: np.ndarray, colours: list[float], around: tuple) -> float:
+    """How much of the mark a model leaves, in luma levels per unit of alpha.
+
+    On the strong template edges the gradient of the restored luma is projected on the alpha gradient;
+    a clean restoration leaves only the photo's own edges there, which point anywhere, so their median
+    is ~0. The median is taken per band of the photo's brightness around the strokes: a wrong opacity
+    or layer count leaves the mark over light parts and an inverted one over dark parts (or the
+    reverse), which one median over all would cancel. The bands' absolute medians are averaged by size.
+    The bands do not depend on the model, so the photo's own edges weigh the same in every candidate.
+    """
+    g, h = _blend(a, colours)
+    Y = (J - h) / g
+    yx, yy = _grad(Y)
+    ax, ay = _grad(a)
+    n2 = ax * ax + ay * ay
+    sxx, syy, _, level = around
+    spread = np.sqrt(((sxx + syy) / 2 + SOBEL_GAIN * FIT_NOISE**2 / (g * g)) / np.maximum(n2, 1e-6))
+    used = (n2 > LEFT_EDGE**2 * float(n2.max())) & (spread <= LEFT_MAX_SPREAD)
+    if not used.any():
+        return 0.0
+    p = (yx * ax + yy * ay)[used] / n2[used]
+    band = np.digitize(level[used], LEFT_BANDS[1:-1])
+    counts = np.bincount(band, minlength=len(LEFT_BANDS) - 1)
+    used = np.flatnonzero(counts >= max(30, LEFT_MIN_SHARE * p.size))
+    if not used.size:
+        return float(abs(np.median(p)))
+    medians = np.array([abs(float(np.median(p[band == i]))) for i in used])
+    return float((medians * counts[used]).sum() / counts[used].sum())
 
 
 def calibrated_file() -> Path:

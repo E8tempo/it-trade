@@ -21,10 +21,13 @@ def synthetic_photo(w: int, h: int, seed: int = 0) -> np.ndarray:
     return np.clip(img, 0, 255).astype(np.uint8)
 
 
-def apply_watermark(rm: WatermarkRemover, rgb: np.ndarray, det: Detection, color: float | None = None) -> np.ndarray:
+def apply_watermark(
+    rm: WatermarkRemover, rgb: np.ndarray, det: Detection, color: float | None = None, opacity: float = 1.0
+) -> np.ndarray:
     color = rm.color if color is None else color
     h, w = rgb.shape[:2]
     x, y, a = rm.alpha_region(det, w, h)
+    a = a * opacity
     out = rgb.astype(np.float32)
     region = out[y : y + a.shape[0], x : x + a.shape[1]]
     out[y : y + a.shape[0], x : x + a.shape[1]] = a[..., None] * color + (1 - a[..., None]) * region
@@ -207,24 +210,66 @@ def test_ghost_on_plain_surface_is_cleaned_without_blurring_edges():
     assert step.min() > 60  # still a one pixel edge (80 levels in the clean photo)
 
 
-def test_a_model_that_leaves_the_mark_is_replaced():
-    """The colour fit sees only strokes over smooth background: a black layer fitted on a dark product
-    can stand in for two grey ones there. Along all the strokes it still leaves the mark, so a fitted
-    candidate that removes it wins."""
+def test_double_grey_mark_over_dark_product_and_light_label():
+    """Over the dark product alone a black layer would stand in for two grey ones; the light label next
+    to it tells them apart."""
     rm = default_remover()
     clean = np.full((800, 800, 3), 60, np.uint8)
-    clean[:, 400:] = 210  # a light label next to the dark product
+    clean[:, 400:] = 210
     det = expected_detection(rm, "big", 800, 800)
     twice = apply_watermark(rm, apply_watermark(rm, clean, det), det)
-    fit = [
-        {"pixels": 1000},
-        {"layers": 1, "shared": True, "colours": [-10.0], "error": 1.0, "plausible": True, "chosen": True},
-        {"layers": 2, "shared": True, "colours": [rm.color, rm.color], "error": 1.5, "plausible": True},
-    ]
-    trace: dict = {}
-    restored, colours = rm._least_left(twice, det, (1, 1), fit, trace)
-    assert colours == [rm.color, rm.color] and fit[2]["chosen"] and not fit[1]["chosen"]
-    assert trace["switched"][0] > 0.15 > trace["switched"][1]
+    restored, found = rm.remove(twice, chroma_subsampling=(1, 1))
+    assert found is not None and found.layers == 2 and found.color > 20
+    assert np.abs(restored.astype(int) - clean.astype(int)).mean() < 0.5
+
+
+def test_fainter_black_mark_over_black_and_white():
+    """A near-black mark drawn fainter than the template: on white it looks like the grey one, on black
+    only the right opacity and colour together remove it."""
+    rm = default_remover()
+    clean = np.full((800, 800, 3), 245, np.uint8)
+    clean[:, 300:520] = 22  # a black product across the middle of the mark
+    det = expected_detection(rm, "big", 800, 800)
+    marked = apply_watermark(rm, clean, det, color=6.0, opacity=0.9)
+    restored, found = rm.remove(marked, det, chroma_subsampling=(1, 1))
+    assert found is not None and found.layers == 1 and found.opacity == 0.9 and abs(found.color - 6.0) < 3
+    err = np.abs(restored.astype(int) - clean.astype(int))
+    assert err[:, 300:520].mean() < 0.5 and err.mean() < 0.5
+
+
+def textured(w: int, h: int, level: float, contrast: float, seed: int = 0) -> np.ndarray:
+    """Grey fabric-like texture: blurred noise around `level`."""
+    noise = np.random.default_rng(seed).normal(0, 1, (h, w)).astype(np.float32)
+    noise = cv2.GaussianBlur(noise, (0, 0), 0.8)
+    noise *= contrast / noise.std()
+    return np.repeat(np.clip(level + noise, 0, 255).astype(np.uint8)[..., None], 3, axis=2)
+
+
+def test_black_mark_on_dark_fabric_is_not_taken_for_a_double_grey():
+    """Without any smooth background the colour still has to be found: a black mark over dark fabric
+    is as strong as two grey ones (k ~2), restored as those it would come out even darker."""
+    rm = default_remover()
+    clean = textured(800, 800, 48, 12)
+    det = expected_detection(rm, "big", 800, 800)
+    marked = apply_watermark(rm, clean, det, color=8.0)
+    restored, found = rm.remove(marked, det, chroma_subsampling=(1, 1))
+    assert found is not None and found.color < 20
+    x, y, a = rm.alpha_region(det, 800, 800)
+    strokes = (slice(y, y + a.shape[0]), slice(x, x + a.shape[1]))
+    on = a > 0.2
+    left = restored[strokes].astype(int)[on] - clean[strokes].astype(int)[on]
+    assert abs(left.mean()) < 1.0  # the letters are neither darker nor lighter than the fabric
+
+
+def test_grey_mark_on_ribbed_surface_keeps_its_colour():
+    """Fine ribs along the letters' strokes must not pull the colour fit."""
+    rm = default_remover()
+    xx = np.arange(600, dtype=np.float32)
+    ribs = 200 + 30 * np.sin(2 * np.pi * xx / 7)
+    clean = np.repeat(np.repeat(ribs[None, :, None], 800, 0), 3, 2).astype(np.uint8)
+    det = expected_detection(rm, "mid", 600, 800)
+    restored, found = rm.remove(apply_watermark(rm, clean, det), det, chroma_subsampling=(1, 1))
+    assert found is not None and found.layers == 1 and abs(found.color - rm.color) < 4
     assert np.abs(restored.astype(int) - clean.astype(int)).mean() < 0.5
 
 
