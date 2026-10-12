@@ -80,7 +80,7 @@ def process_image(data: bytes, media_root: str, image_id: int) -> ProcessedImage
 def _variant_label(det) -> str:
     """e.g. "big", "mid-rot", "big-x2", "small-black" (stored for diagnostics)."""
     label = det.template + ("-rot" if det.rotated else "")
-    if det.color is not None and det.color < 10:
+    if det.color is not None and det.color < 20:  # the grey mark fits as ~25..31, the near-black one below ~15
         label += "-black"
     return label + (f"-x{det.layers}" if det.layers > 1 else "")
 

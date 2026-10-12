@@ -120,7 +120,7 @@ async def test_watermark_lab(admin):
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["detection"]["template"] == "big" and d["detection"]["verdict"] == "certain"
-    assert abs(d["detection"]["strength_left"]) < 0.1
+    assert d["detection"]["left"] < 1 and d["detection"]["left_before"] > 50
     assert d["fit"]["candidates"] and any(c["chosen"] for c in d["fit"]["candidates"])
     assert {"original", "cleaned", "crop_before", "crop_after", "mask", "diff"} <= d["images"].keys()
 

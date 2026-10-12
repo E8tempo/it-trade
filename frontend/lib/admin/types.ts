@@ -160,6 +160,7 @@ export type LabDetection = {
   score: number;
   strength: number;
   layers: number;
+  opacity: number;
   color: number | null;
 };
 
@@ -175,16 +176,23 @@ export type LabResult = {
         moved: [number, number] | null;
         box: [number, number, number, number];
         template_size: [number, number];
-        strength_left: number;
+        left: number; // mark left after the removal, luma levels per unit of alpha
+        left_before: number;
       })
     | null;
   plain?: { share: number; max: number };
   fit?: {
     pixels: number;
-    fallback: boolean;
-    switched: [number, number] | null;
     grey: number;
-    candidates: { layers: number; shared: boolean; colours: number[]; error: number; plausible: boolean; chosen: boolean }[];
+    candidates: {
+      layers: number;
+      shared: boolean;
+      opacity: number;
+      colours: number[];
+      left: number;
+      plausible: boolean;
+      chosen: boolean;
+    }[];
   };
   timings_ms: { detect: number; remove?: number };
   images: Partial<Record<"original" | "cleaned" | "crop_before" | "crop_after" | "mask" | "diff", string>>;
