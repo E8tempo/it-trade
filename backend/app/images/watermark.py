@@ -55,6 +55,7 @@ relative to the template), which rejects textures that merely correlate by chanc
 """
 
 import math
+import warnings
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -117,6 +118,19 @@ LEFT_BANDS, LEFT_MIN_SHARE = (0, 40, 80, 130, 190, 256), 0.03
 # every opacity, a fit outside means a wrong layer count. Layer colours on their own may leave it:
 # a double mark whose layers differ slightly in shape fits as e.g. [-92, 95] (2 of ~700 photos).
 COLOUR_RANGE = (-25.0, 85.0)
+# The mark is not one grey: the letters have a thin near-black outline. Over white an outline pixel and a
+# denser grey one look the same, so the alpha templates (calibrated mostly on white) absorbed it, and over
+# dark parts of a photo it stayed as a thin dark contour of the letters. Measured on ~1450 photos with dark
+# and light backgrounds under the mark: per template alpha, one layer transmits t(a) of the photo and adds
+# W * c(a), with c(a)/a from ~0.1 at the edges to 1 in the strokes. Stored in the template file under these
+# keys (see calibrate.layer_curve).
+CURVE_KEYS = ("curve_a", "curve_t", "curve_c")
+# The curve is used only where it clearly helps: both models remove the mark, and the curve's result is
+# kept if it leaves the letter contour (see _contour) at least OUTLINE_GAIN[0] levels and to OUTLINE_GAIN[1]
+# of the plain model's. Elsewhere the result is the plain model's, unchanged. On ~2000 supplier photos this
+# picks the curve for ~50, nearly all with a dark product under the mark.
+OUTLINE_GAIN = (0.5, 0.7)
+CONTOUR_TILE, CONTOUR_SHIFT = 40, 11
 CHROMA_BLUR = 0.8  # px, measured on double marks over colourful backgrounds
 # Final cleanup of plain surfaces: weight 1 where the surroundings (non-stroke pixels in a
 # PLAIN_WINDOWS square) vary by at most PLAIN_STD[0] luma levels, 0 from PLAIN_STD[1] on. The
@@ -152,6 +166,7 @@ class Detection:
     color: float | None = None  # effective colour of the removed layers at full stroke opacity (set by remove)
     dx: float = 0.0  # sub-pixel shift of the template from (x, y), same frame (set by remove)
     dy: float = 0.0
+    outline: bool = False  # removed with the calibrated layer curve (the letters' dark outline), see OUTLINE_GAIN
 
 
 def _grad(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -191,8 +206,9 @@ def _box_sum(v: np.ndarray, size: int) -> np.ndarray:
 
 
 class WatermarkRemover:
-    def __init__(self, alphas: dict[str, np.ndarray], color: float):
+    def __init__(self, alphas: dict[str, np.ndarray], color: float, curve: Curve = None):
         self.color = float(color)
+        self.curve = curve
         self.templates = [_make_template(name, a) for name, a in alphas.items()]
         self._shifted: dict[tuple[str, float, float], np.ndarray] = {}
 
@@ -202,7 +218,8 @@ class WatermarkRemover:
         alphas = {v: d[v] for v in VARIANTS if v in d.files}
         if "tiny" not in alphas:
             alphas["tiny"] = cv2.resize(alphas["big"].astype(np.float32), TINY_SIZE, interpolation=cv2.INTER_AREA)
-        return cls(alphas, float(d["W"]))
+        curve = tuple(d[k].astype(np.float32) for k in CURVE_KEYS) if CURVE_KEYS[0] in d.files else None
+        return cls(alphas, float(d["W"]), curve)
 
     def template(self, name: str) -> Template:
         return next(t for t in self.templates if t.name == name)
@@ -343,7 +360,7 @@ class WatermarkRemover:
         alpha (see _mark_left): ~0..3 on a clean result, tens where the letters still show."""
         J, A = self.region(rgb, det)
         a = A * det.opacity
-        return _mark_left(J, a, [], _surroundings(J, a))
+        return _mark_left(J, a, [], _surroundings(J, a), self.curve if det.outline else None)
 
     def remove(
         self,
@@ -360,23 +377,43 @@ class WatermarkRemover:
         det = det or self.detect(rgb)
         if det is None:
             return rgb, None
-        fit: dict = {}
-        model = self._fit(rgb, det, fit)
-        moved = self._refine(rgb, det, model["colours"], model["opacity"])
-        if moved is not det:
-            if trace is not None:
-                trace["moved"] = [moved.x + moved.dx - det.x, moved.y + moved.dy - det.y]
-            det, fit = moved, {}
-            model = self._fit(rgb, det, fit)
+        steps: dict = {}
+        out, found = self._remove(rgb, det, chroma_subsampling, None, steps)
+        if self.curve is not None:
+            plain_left, curve_left, better = max(_contour(self, out, found), 0.0), None, False
+            if plain_left >= OUTLINE_GAIN[0]:  # otherwise the curve cannot gain enough: not tried (~30% of photos)
+                with_curve: dict = {}
+                out2, found2 = self._remove(rgb, det, chroma_subsampling, self.curve, with_curve)
+                curve_left = max(_contour(self, out2, found2), 0.0)
+                better = plain_left - curve_left >= OUTLINE_GAIN[0] and curve_left <= OUTLINE_GAIN[1] * plain_left
+                if better:
+                    out, found, steps = out2, replace(found2, outline=True), with_curve
+            steps["outline"] = {"plain": plain_left, "curve": curve_left, "used": better}
         if trace is not None:
-            trace["fit"] = fit
+            trace.update(steps)
+        return out, found
+
+    def _remove(
+        self, rgb: np.ndarray, det: Detection, chroma_subsampling: tuple[int, int], curve: Curve, trace: dict
+    ) -> tuple[np.ndarray, Detection]:
+        """remove() with one layer model."""
+        fit: dict = {}
+        model = self._fit(rgb, det, fit, curve)
+        moved = self._refine(rgb, det, model["colours"], model["opacity"], curve)
+        if moved is not det:
+            trace["moved"] = [moved.x + moved.dx - det.x, moved.y + moved.dy - det.y]
+            det, fit = moved, {}
+            model = self._fit(rgb, det, fit, curve)
+        trace["fit"] = fit
         colours, opacity = model["colours"], model["opacity"]
-        restored = self._invert(rgb, det, chroma_subsampling, colours, opacity)
+        restored = self._invert(rgb, det, chroma_subsampling, colours, opacity, curve)
         out = self._clean_plain(rgb, restored, det, trace)
         a_max = opacity * float(self.template(det.template).alpha.max())
-        return out, replace(det, layers=len(colours), opacity=opacity, color=float(_effective_colour(colours, a_max)))
+        return out, replace(det, layers=len(colours), opacity=opacity, color=float(_effective_colour(colours, a_max, curve)))
 
-    def _refine(self, rgb: np.ndarray, det: Detection, colours: list[float], opacity: float = 1.0) -> Detection:
+    def _refine(
+        self, rgb: np.ndarray, det: Detection, colours: list[float], opacity: float = 1.0, curve: Curve = None
+    ) -> Detection:
         """The detection, a placement 1 px away or half a pixel from the best of those, whichever
         restores the strokes with clearly less edge energy (median gradient magnitude of the
         restored luma along the stroke edges)."""
@@ -392,7 +429,7 @@ class WatermarkRemover:
         # g, h of the whole template with a 3 px margin: moved by whole pixels the template is a
         # slice of them, moved by half a pixel the mean of the two (four) neighbouring slices
         pad = np.pad(alpha, 3)
-        g, h = _blend(pad * opacity, colours)
+        g, h = _blend(pad * opacity, colours, curve)
 
         def at(v: np.ndarray, x: float, y: float) -> np.ndarray:
             xs, ys = {math.floor(x), math.ceil(x)}, {math.floor(y), math.ceil(y)}
@@ -472,7 +509,7 @@ class WatermarkRemover:
         result[y0:y1, x0:x1] = np.clip(region + shift[..., None] + 0.5, 0, 255).astype(np.uint8)
         return result
 
-    def _fit(self, rgb: np.ndarray, det: Detection, trace: dict | None = None) -> dict:
+    def _fit(self, rgb: np.ndarray, det: Detection, trace: dict | None = None, curve: Curve = None) -> dict:
         """Model of the mark at the detected place: {"layers", "shared", "opacity", "colours", "left"}.
 
         Candidates, from the simplest: one layer at the template's opacity, one layer at the other
@@ -495,14 +532,14 @@ class WatermarkRemover:
             for step in steps:
                 found = []
                 for layers, shared, opacity in step:
-                    colours = _fit_layers(J, A * opacity, edges, around, layers, shared)
+                    colours = _fit_layers(J, A * opacity, edges, around, layers, shared, curve)
                     c = {
                         "layers": layers,
                         "shared": shared,
                         "opacity": opacity,
                         "colours": colours,
-                        "left": _mark_left(J, A * opacity, colours, around),
-                        "plausible": _plausible(colours, opacity * a_max),
+                        "left": _mark_left(J, A * opacity, colours, around, curve),
+                        "plausible": _plausible(colours, opacity * a_max, curve),
                     }
                     candidates.append(c)
                     if c["plausible"]:
@@ -527,6 +564,7 @@ class WatermarkRemover:
         chroma_subsampling: tuple[int, int],
         colours: list[float],
         opacity: float = 1.0,
+        curve: Curve = None,
     ) -> np.ndarray:
         """Inversion of len(colours) stacked layers of the given opacity at the detected place."""
         H, W = rgb.shape[:2]
@@ -539,7 +577,7 @@ class WatermarkRemover:
         rw, rh = x1 - x0, y1 - y0
         a = np.zeros((rh, rw), np.float32)
         a[ay - y0 : ay - y0 + ah, ax - x0 : ax - x0 + aw] = alpha
-        g, h = _blend(a * opacity, colours)
+        g, h = _blend(a * opacity, colours, curve)
         if (sx, sy) != (1, 1):
             cw, ch = -(-rw // sx), -(-rh // sy)
             pad = np.ones((ch * sy, cw * sx), np.float32)
@@ -562,23 +600,42 @@ class WatermarkRemover:
         return out
 
 
-def _blend(a: np.ndarray, colours: list[float]) -> tuple[np.ndarray, np.ndarray]:
+# One layer of the mark at template alpha a: J = t(a) * I + W * c(a). Without a calibrated curve t = 1 - a,
+# c = a (a single colour). The calibrated curve (see Curve) has the dark outline of the letters in it.
+Curve = tuple[np.ndarray, np.ndarray, np.ndarray] | None
+
+
+def _layer(a: np.ndarray, curve: Curve) -> tuple[np.ndarray, np.ndarray]:
+    """(t, c) of one layer at alpha `a`."""
+    if curve is None:
+        return 1 - a, a
+    a_c, t_c, c_c = curve
+    return np.interp(a, a_c, t_c).astype(np.float32), np.interp(a, a_c, c_c).astype(np.float32)
+
+
+def _blend(a: np.ndarray, colours: list[float], curve: Curve = None) -> tuple[np.ndarray, np.ndarray]:
     """(g, h) of J = g*I + h for len(colours) layers drawn in this order with alpha `a` (none: g = 1, h = 0)."""
     layers = len(colours)
-    g = (1 - a) ** layers
-    h = sum(c * a * (1 - a) ** (layers - i) for i, c in enumerate(colours, 1))
+    if curve is None:  # one grey: kept in this form so its results stay bit for bit the same
+        g = (1 - a) ** layers
+        h = sum(c * a * (1 - a) ** (layers - i) for i, c in enumerate(colours, 1))
+        return g, h
+    t, c = _layer(a, curve)
+    g, h = np.ones_like(t), np.zeros_like(t)
+    for w in colours:
+        g, h = g * t, h * t + w * c
     return g, h
 
 
-def _effective_colour(colours: list[float], a: np.ndarray | float) -> np.ndarray:
+def _effective_colour(colours: list[float], a: np.ndarray | float, curve: Curve = None) -> np.ndarray:
     """Colour of the single layer of opacity 1 - g that blends like the whole stack at alpha `a`."""
-    g, h = _blend(np.asarray(a, np.float32), colours)
+    g, h = _blend(np.asarray(a, np.float32), colours, curve)
     return h / (1 - g)
 
 
-def _plausible(colours: list[float], a_max: float) -> bool:
+def _plausible(colours: list[float], a_max: float, curve: Curve = None) -> bool:
     """Whether the effective colour of the stack stays in COLOUR_RANGE up to opacity a_max."""
-    effective = _effective_colour(colours, np.linspace(0.01, max(a_max, 0.02), 48))
+    effective = _effective_colour(colours, np.linspace(0.01, max(a_max, 0.02), 48), curve)
     return COLOUR_RANGE[0] <= float(effective.min()) and float(effective.max()) <= COLOUR_RANGE[1]
 
 
@@ -601,7 +658,7 @@ def _whitening(sxx: np.ndarray, syy: np.ndarray, sxy: np.ndarray) -> tuple[np.nd
 
 
 def _fit_layers(
-    J: np.ndarray, a: np.ndarray, edges: np.ndarray, around: tuple, layers: int, shared: bool
+    J: np.ndarray, a: np.ndarray, edges: np.ndarray, around: tuple, layers: int, shared: bool, curve: Curve = None
 ) -> list[float]:
     """Layer colours that make the restored stroke edges as flat as the image around them.
 
@@ -611,11 +668,12 @@ def _fit_layers(
     (fabric, ribs, print) weighs little, a smooth surround a lot. The colours minimise the sum of the
     whitened residual lengths (iteratively reweighted least squares), robust to product edges.
     """
-    g = (1 - a) ** layers
-    if shared:  # all layers of one colour: h = W * (1 - g)
-        terms = [(1 - g) / g]
+    t, c = _layer(a, curve)
+    g = (1 - a) ** layers if curve is None else t**layers
+    if shared:  # all layers of one colour: h = W * c * (1 + t + ... + t^(L-1)), = W * (1 - g) for one grey
+        terms = [(1 - g) / g] if curve is None else [_blend(a, [1.0] * layers, curve)[1] / g]
     else:
-        terms = [a * (1 - a) ** (layers - i) / g for i in range(1, layers + 1)]
+        terms = [c * t ** (layers - i) / g for i in range(1, layers + 1)]
     noise = SOBEL_GAIN * FIT_NOISE**2 / (g * g)
     sxx, syy, sxy, _ = around
     p, q, r = _whitening((sxx + noise)[edges], (syy + noise)[edges], sxy[edges])
@@ -637,7 +695,7 @@ def _fit_layers(
     return [float(c) for c in (np.repeat(beta, layers) if shared else beta)]
 
 
-def _mark_left(J: np.ndarray, a: np.ndarray, colours: list[float], around: tuple) -> float:
+def _mark_left(J: np.ndarray, a: np.ndarray, colours: list[float], around: tuple, curve: Curve = None) -> float:
     """How much of the mark a model leaves, in luma levels per unit of alpha.
 
     On the strong template edges the gradient of the restored luma is projected on the alpha gradient;
@@ -647,7 +705,7 @@ def _mark_left(J: np.ndarray, a: np.ndarray, colours: list[float], around: tuple
     reverse), which one median over all would cancel. The bands' absolute medians are averaged by size.
     The bands do not depend on the model, so the photo's own edges weigh the same in every candidate.
     """
-    g, h = _blend(a, colours)
+    g, h = _blend(a, colours, curve)
     Y = (J - h) / g
     yx, yy = _grad(Y)
     ax, ay = _grad(a)
@@ -665,6 +723,65 @@ def _mark_left(J: np.ndarray, a: np.ndarray, colours: list[float], around: tuple
         return float(abs(np.median(p)))
     medians = np.array([abs(float(np.median(p[band == i]))) for i in used])
     return float((medians * counts[used]).sum() / counts[used].sum())
+
+
+def _signed_distance(a: np.ndarray) -> np.ndarray:
+    """Distance to the letter contour (half the alpha maximum), positive inside the strokes."""
+    inside = (a > 0.5 * float(a.max())).astype(np.uint8)
+    d_in = cv2.distanceTransform(inside, cv2.DIST_L2, 3)
+    d_out = cv2.distanceTransform(1 - inside, cv2.DIST_L2, 3)
+    return np.where(inside > 0, d_in - 0.5, 0.5 - d_out)
+
+
+def _contour_tiles(fine: np.ndarray, distance: np.ndarray, usable: np.ndarray) -> np.ndarray:
+    """Per CONTOUR_TILE square: RMS of the mean of `fine` per 1 px distance bin (-4..4), nan if too few pixels."""
+    k = np.rint(distance).astype(int)
+    near = usable & (np.abs(k) <= 4)
+    rows, cols = -(-fine.shape[0] // CONTOUR_TILE), -(-fine.shape[1] // CONTOUR_TILE)
+    out = np.full((rows, cols), np.nan, np.float32)
+    for ty in range(rows):
+        for tx in range(cols):
+            sl = (slice(ty * CONTOUR_TILE, (ty + 1) * CONTOUR_TILE), slice(tx * CONTOUR_TILE, (tx + 1) * CONTOUR_TILE))
+            m = near[sl]
+            if m.sum() < 120:
+                continue
+            v, b = fine[sl][m], k[sl][m] + 4
+            n = np.bincount(b, minlength=9)
+            if (n >= 8).sum() < 7:
+                continue
+            profile = (np.bincount(b, v, 9)[n >= 8] / n[n >= 8]).astype(np.float64)
+            out[ty, tx] = float(np.sqrt(np.mean((profile - profile.mean()) ** 2)))
+    return out
+
+
+def _contour(rm: "WatermarkRemover", rgb: np.ndarray, det: Detection) -> float:
+    """How visible the letter contour is in an image, luma levels: the high-passed luma averaged by the distance
+    to the contour, per tile (a leftover outline is a line at a fixed distance; the photo's own texture does not
+    follow the letters), minus the same for the contour moved off the mark (the photo alone), 90th percentile."""
+    H, W = rgb.shape[:2]
+    ax, ay, alpha = rm.alpha_region(det, W, H)
+    m = 16
+    x0, y0 = max(0, ax - m), max(0, ay - m)
+    x1, y1 = min(W, ax + alpha.shape[1] + m), min(H, ay + alpha.shape[0] + m)
+    a = np.zeros((y1 - y0, x1 - x0), np.float32)
+    a[ay - y0 : ay - y0 + alpha.shape[0], ax - x0 : ax - x0 + alpha.shape[1]] = alpha
+    if not a.any():
+        return 0.0
+    Y = luma(rgb[y0:y1, x0:x1])
+    fine = Y - cv2.GaussianBlur(Y, (0, 0), 3.0)
+    on = _contour_tiles(fine, _signed_distance(a), np.ones(a.shape, bool))
+    s = CONTOUR_SHIFT
+    off = [
+        _contour_tiles(fine, _signed_distance(np.roll(a, (dy, dx), (0, 1))), a < 0.003)
+        for dx in (-s, 0, s)
+        for dy in (-s, 0, s)
+        if dx or dy
+    ]
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # tiles without any reference
+        extra = on - np.nan_to_num(np.nanmedian(np.stack(off), 0))
+    extra = extra[~np.isnan(on)]
+    return float(np.percentile(extra, 90)) if extra.size else 0.0
 
 
 def calibrated_file() -> Path:

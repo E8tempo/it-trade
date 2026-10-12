@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from app.images.watermark import Detection, WatermarkRemover, _plausible, default_remover
+from app.images.watermark import Curve, Detection, WatermarkRemover, _blend, _layer, _plausible, default_remover
 
 
 def synthetic_photo(w: int, h: int, seed: int = 0) -> np.ndarray:
@@ -22,15 +22,21 @@ def synthetic_photo(w: int, h: int, seed: int = 0) -> np.ndarray:
 
 
 def apply_watermark(
-    rm: WatermarkRemover, rgb: np.ndarray, det: Detection, color: float | None = None, opacity: float = 1.0
+    rm: WatermarkRemover,
+    rgb: np.ndarray,
+    det: Detection,
+    color: float | None = None,
+    opacity: float = 1.0,
+    curve: Curve = None,
 ) -> np.ndarray:
+    """The mark drawn over `rgb`: one grey, or with the letters' dark outline when `curve` is given."""
     color = rm.color if color is None else color
     h, w = rgb.shape[:2]
     x, y, a = rm.alpha_region(det, w, h)
-    a = a * opacity
+    g, add = _blend(a * opacity, [color], curve)
     out = rgb.astype(np.float32)
     region = out[y : y + a.shape[0], x : x + a.shape[1]]
-    out[y : y + a.shape[0], x : x + a.shape[1]] = a[..., None] * color + (1 - a[..., None]) * region
+    out[y : y + a.shape[0], x : x + a.shape[1]] = g[..., None] * region + add[..., None]
     return np.clip(out + 0.5, 0, 255).astype(np.uint8)
 
 
@@ -271,6 +277,49 @@ def test_grey_mark_on_ribbed_surface_keeps_its_colour():
     restored, found = rm.remove(apply_watermark(rm, clean, det), det, chroma_subsampling=(1, 1))
     assert found is not None and found.layers == 1 and abs(found.color - rm.color) < 4
     assert np.abs(restored.astype(int) - clean.astype(int)).mean() < 0.5
+
+
+@pytest.mark.parametrize(("plain_left", "curve_left", "used"), [(2.0, 0.6, True), (1.0, 0.8, False), (0.6, 0.0, True), (0.4, 0.0, False)])
+def test_outline_model_is_used_only_where_it_clearly_helps(monkeypatch, plain_left, curve_left, used):
+    """Both layer models remove the mark; the calibrated curve's result is kept only if it leaves clearly less of
+    the letter contour, otherwise the result is exactly the one-grey model's."""
+    import app.images.watermark as wm
+
+    rm = default_remover()
+    det = expected_detection(rm, "big", 800, 800)
+    marked = apply_watermark(rm, synthetic_photo(800, 800, seed=9), det)
+    plain = WatermarkRemover({t.name: t.alpha for t in rm.templates}, rm.color)
+    expected, _ = plain.remove(marked, det, chroma_subsampling=(1, 1))
+    left = iter([plain_left, curve_left])
+    monkeypatch.setattr(wm, "_contour", lambda *_: next(left))
+    trace: dict = {}
+    restored, found = rm.remove(marked, det, chroma_subsampling=(1, 1), trace=trace)
+    assert found is not None and found.outline == used and trace["outline"]["used"] == used
+    assert np.array_equal(restored, expected) != used
+
+
+def test_layer_curve_is_recovered_from_dark_and_light_backgrounds(tmp_path):
+    """The letters' dark outline (see CURVE_KEYS) only shows over dark backgrounds: calibrating the layer model on
+    photos with both recovers the curve the marks were drawn with."""
+    from app.images.calibrate import detections, layer_curve
+
+    rm = default_remover()
+    plain = WatermarkRemover({t.name: t.alpha for t in rm.templates}, rm.color)  # as before the curve was known
+    rng = np.random.default_rng(0)
+    det = expected_detection(rm, "big", 800, 800)
+    for i in range(40):
+        photo = np.empty((800, 800, 3), np.float32)
+        photo[:] = rng.uniform(150, 240)
+        x = int(rng.integers(40, 560))
+        photo[:, x : x + 200] = rng.uniform(15, 110)  # a dark product somewhere under the mark
+        photo += rng.normal(0, 0.6, photo.shape)
+        marked = apply_watermark(rm, photo.clip(0, 255).astype(np.uint8), det, curve=rm.curve)
+        Image.fromarray(marked).save(tmp_path / f"{i}.png")
+    curve = layer_curve(plain, detections(plain, sorted(tmp_path.glob("*.png"))))
+    assert curve is not None
+    probe = np.array([0.1, 0.2, 0.3, 0.42], np.float32)
+    for got, want in zip(_layer(probe, curve), _layer(probe, rm.curve), strict=True):
+        assert np.abs(got - want).max() < 0.02
 
 
 def test_layer_colours_are_judged_as_a_stack():

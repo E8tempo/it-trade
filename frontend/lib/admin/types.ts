@@ -161,6 +161,7 @@ export type LabDetection = {
   strength: number;
   layers: number;
   opacity: number;
+  outline: boolean;
   color: number | null;
 };
 
@@ -181,6 +182,7 @@ export type LabResult = {
       })
     | null;
   plain?: { share: number; max: number };
+  outline?: { plain: number; curve: number | null; used: boolean } | null;
   fit?: {
     pixels: number;
     grey: number;
@@ -199,5 +201,7 @@ export type LabResult = {
 };
 
 export type LabSample = { image_id: number; sku: number; name: string; variant: string; thumb: string };
+
+export type LabSampleGroup = { variant: string; total: number; items: LabSample[] };
 
 export type FailedImage = { id: number; sku: number; source_url: string; error: string | null; attempts: number };

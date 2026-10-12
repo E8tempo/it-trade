@@ -5,12 +5,13 @@ import Link from "next/link";
 import { useRef, useState, type DragEvent } from "react";
 
 import { CompareSlider } from "@/components/admin/lab/compare-slider";
+import { SamplePicker } from "@/components/admin/lab/sample-picker";
 import { Panel } from "@/components/admin/ui";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { apiErrorText } from "@/lib/admin/errors";
 import { variantLabel } from "@/lib/admin/labels";
-import type { LabResult, LabSample } from "@/lib/admin/types";
+import type { LabResult, LabSample, LabSampleGroup } from "@/lib/admin/types";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
@@ -23,9 +24,10 @@ const VERDICT: Record<string, string> = {
 
 const fmt = (v: number, digits = 3) => v.toLocaleString("ru-RU", { maximumFractionDigits: digits, minimumFractionDigits: digits });
 
-export function WatermarkLab({ samples }: { samples: LabSample[] }) {
+export function WatermarkLab({ samples }: { samples: LabSampleGroup[] }) {
   const [result, setResult] = useState<LabResult | null>(null);
   const [source, setSource] = useState<string>("");
+  const [activeId, setActiveId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -47,12 +49,14 @@ export function WatermarkLab({ samples }: { samples: LabSample[] }) {
   const runFile = (file: File) => {
     const body = new FormData();
     body.set("file", file);
+    setActiveId(null);
     run(body, `файл «${file.name}»`);
   };
   const runSample = (s: LabSample) => {
     const body = new FormData();
     body.set("image_id", String(s.image_id));
-    run(body, `фото ${s.image_id} товара «${s.name}» (оригинал поставщика)`);
+    setActiveId(s.image_id);
+    run(body, `фото ${s.image_id} товара «${s.name}», арт. ${s.sku} (оригинал поставщика)`);
   };
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
@@ -60,13 +64,6 @@ export function WatermarkLab({ samples }: { samples: LabSample[] }) {
     const file = e.dataTransfer.files[0];
     if (file) runFile(file);
   };
-
-  const groups = Object.entries(
-    samples.reduce<Record<string, LabSample[]>>((acc, s) => {
-      (acc[s.variant] ??= []).push(s);
-      return acc;
-    }, {}),
-  );
 
   return (
     <div className="space-y-6">
@@ -103,32 +100,7 @@ export function WatermarkLab({ samples }: { samples: LabSample[] }) {
             <p className="text-xs text-muted-foreground">JPEG, PNG или WebP до 15 МБ. Лучше всего — оригинал с сайта поставщика.</p>
           </div>
         </Panel>
-        <Panel title="Фото из каталога">
-          <p className="mb-3 text-sm text-muted-foreground">
-            По два обработанных фото каждого варианта знака. Берётся оригинал у поставщика, со знаком.
-          </p>
-          <div className="max-h-72 space-y-3 overflow-y-auto pr-1">
-            {groups.map(([variant, items]) => (
-              <div key={variant}>
-                <p className="mb-1.5 text-xs font-medium text-muted-foreground uppercase">{variantLabel(variant)}</p>
-                <div className="flex flex-wrap gap-2">
-                  {items.map((s) => (
-                    <button
-                      key={s.image_id}
-                      onClick={() => runSample(s)}
-                      disabled={busy}
-                      title={s.name}
-                      className="size-16 overflow-hidden rounded-lg bg-muted p-1 ring-1 ring-foreground/10 transition hover:ring-primary disabled:opacity-50"
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element -- pre-optimised thumbnail */}
-                      <img src={s.thumb} alt={s.name} className="size-full object-contain mix-blend-multiply" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Panel>
+        <SamplePicker initial={samples} activeId={activeId} disabled={busy} onPick={runSample} />
       </div>
 
       {busy && (
@@ -166,6 +138,18 @@ function Result({ result: r, source }: { result: LabResult; source: string }) {
                 label="Положение"
                 value={d.moved ? `уточнено: сдвиг на (${d.moved.map((v) => (v > 0 ? `+${v}` : String(v))).join(", ")}) px` : "как нашёл детектор"}
               />
+              {r.outline && (
+                <Fact
+                  label="Тёмная обводка букв"
+                  value={
+                    r.outline.curve == null
+                      ? `не понадобилась: контур ${fmt(r.outline.plain, 1)}`
+                      : r.outline.used
+                        ? `учтена: контур ${fmt(r.outline.plain, 1)} → ${fmt(r.outline.curve, 1)}`
+                        : `не помогла: контур ${fmt(r.outline.plain, 1)}, с ней ${fmt(r.outline.curve, 1)}`
+                  }
+                />
+              )}
               {r.plain && (
                 <Fact
                   label="Доводка ровного фона"
