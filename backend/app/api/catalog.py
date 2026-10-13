@@ -2,7 +2,7 @@ import time
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import Select, and_, case, exists, func, select
+from sqlalchemy import Select, and_, case, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -20,7 +20,7 @@ from app.db import get_session
 from app.images.gallery import gallery
 from app.models import Category, Product, ProductImage
 from app.models.catalog import VISIBLE_STATUSES, ImageStatus
-from app.site_settings import ShopSettings, get_settings_obj
+from app.site_settings import ImageSettings, ShopSettings, cached_settings_obj, get_settings_obj
 
 router = APIRouter(prefix="/api", tags=["catalog"])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -233,10 +233,15 @@ async def product_detail(sku: int, session: Session):
     p = await session.get(Product, sku)
     if not p or not p.is_active or p.is_hidden:
         raise HTTPException(404, "Product not found")
+    loading = await cached_settings_obj(session, ImageSettings)
     images = (
         await session.scalars(
             select(ProductImage)
-            .where(ProductImage.sku == sku, ProductImage.status != ImageStatus.failed)
+            .where(
+                ProductImage.sku == sku,
+                ProductImage.status != ImageStatus.failed,
+                or_(ProductImage.position < loading.per_product, ProductImage.id == p.main_image_id),
+            )
             .order_by(ProductImage.position)
         )
     ).all()

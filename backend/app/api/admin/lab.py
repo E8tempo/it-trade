@@ -8,6 +8,7 @@ from sqlalchemy import BigInteger, cast, func, or_, select
 from starlette.concurrency import run_in_threadpool
 
 from app.api.admin.common import Session, like
+from app.api.media import ondemand_client
 from app.config import get_settings
 from app.images.lab import analyze
 from app.images.processing import image_url
@@ -46,7 +47,8 @@ async def lab_watermark(
         if img is None:
             raise HTTPException(404, "Image not found")
         try:
-            data = await request.app.state.ondemand_client.fetch_image(img.source_url, size="original")
+            client = await ondemand_client(request, session)
+            data = await client.fetch_image(img.source_url, size="original")
         except SupplierError as e:
             raise HTTPException(502, f"Поставщик не отдал фото: {e}") from e
     elif file is not None:
@@ -112,6 +114,6 @@ async def lab_samples(
     for r in rows:
         g = groups.setdefault(r.variant, SampleGroup(variant=r.variant, total=totals.get(r.variant, 0), items=[]))
         g.items.append(
-            Sample(image_id=r.id, sku=r.sku, name=r.name, variant=r.variant, thumb=image_url(media, r.id, "sm", r.version))
+            Sample(image_id=r.id, sku=r.sku, name=r.name, variant=r.variant, thumb=image_url(media, r.id, "md", r.version))
         )
     return list(groups.values())

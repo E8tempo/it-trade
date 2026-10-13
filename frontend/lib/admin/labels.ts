@@ -51,3 +51,15 @@ export function variantLabel(v: string): string {
   }
   return parts.join(", ");
 }
+
+/** Rough duration for estimates: "меньше минуты", "40 мин", "6 ч 20 мин", "28 ч", "3 дн 4 ч". */
+export function duration(seconds: number): string {
+  if (seconds < 60) return "меньше минуты";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} мин`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 10) return minutes % 60 ? `${hours} ч ${minutes % 60} мин` : `${hours} ч`;
+  if (hours < 48) return `${Math.round(minutes / 60)} ч`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 ? `${days} дн ${hours % 24} ч` : `${days} дн`;
+}

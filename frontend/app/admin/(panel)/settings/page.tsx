@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Suspense } from "react";
 
-import { RequeuePanel, ShopSettingsForm } from "@/components/admin/settings-forms";
-import { Empty, PageHeader, Panel } from "@/components/admin/ui";
+import { ShopSettingsForm } from "@/components/admin/settings-forms";
+import { PageHeader, Panel } from "@/components/admin/ui";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { FailedImage, ShopSettings } from "@/lib/admin/types";
+import type { ShopSettings } from "@/lib/admin/types";
 import { apiServer } from "@/lib/api/server";
 
 export const metadata: Metadata = { title: "Настройки" };
@@ -20,12 +21,15 @@ export default function SettingsPage() {
         <Suspense fallback={<Skeleton className="h-80 rounded-2xl" />}>
           <ShopSettingsContent />
         </Suspense>
-        <div className="space-y-6">
-          <RequeuePanel />
-          <Suspense fallback={<Skeleton className="h-40 rounded-2xl" />}>
-            <FailedImages />
-          </Suspense>
-        </div>
+        <Panel title="Фото товаров">
+          <p className="text-sm text-muted-foreground">
+            Сколько фото грузить на товар, скорость загрузки, пауза, переобработка и фото с ошибками — на странице{" "}
+            <Link href="/admin/loading" className="text-primary hover:underline">
+              «Загрузка каталога»
+            </Link>
+            .
+          </p>
+        </Panel>
       </div>
     </>
   );
@@ -34,26 +38,4 @@ export default function SettingsPage() {
 async function ShopSettingsContent() {
   const settings = await apiServer<ShopSettings>("/api/admin/settings/shop");
   return <ShopSettingsForm settings={settings} />;
-}
-
-async function FailedImages() {
-  const failed = await apiServer<FailedImage[]>("/api/admin/images/failed?limit=50");
-  return (
-    <Panel title="Фото с ошибками">
-      {failed.length === 0 ? (
-        <Empty>Ошибок нет</Empty>
-      ) : (
-        <ul className="max-h-80 divide-y overflow-y-auto text-sm">
-          {failed.map((f) => (
-            <li key={f.id} className="py-2">
-              <p>
-                Фото {f.id} · товар {f.sku}
-              </p>
-              <p className="text-xs break-all text-muted-foreground">{f.error ?? "без описания"}</p>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Panel>
-  );
 }

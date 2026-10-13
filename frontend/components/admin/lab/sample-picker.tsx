@@ -1,6 +1,7 @@
 "use client";
 
 import { LoaderCircle, Search, Shuffle } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { Panel } from "@/components/admin/ui";
@@ -96,7 +97,10 @@ export function SamplePicker({
     >
       <p className="mb-3 text-sm text-muted-foreground">
         Обработанные фото по вариантам знака, {seed === null ? "сначала новые" : "в случайном порядке"}. Берётся оригинал у поставщика,
-        со знаком.
+        со знаком.{" "}
+        <Link href="/admin/docs/watermark-history#labels" className="text-primary hover:underline">
+          Что значат метки знака
+        </Link>
       </p>
       <div className="relative mb-3">
         {pending ? (

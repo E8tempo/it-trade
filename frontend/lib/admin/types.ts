@@ -205,3 +205,94 @@ export type LabSample = { image_id: number; sku: number; name: string; variant: 
 export type LabSampleGroup = { variant: string; total: number; items: LabSample[] };
 
 export type FailedImage = { id: number; sku: number; source_url: string; error: string | null; attempts: number };
+
+// --- catalog loading (backend/app/api/admin/loading.py) ---
+
+export type ImageSettings = {
+  paused: boolean;
+  per_product: number;
+  gallery: boolean;
+  reprocess: boolean;
+  download_rps: number;
+};
+
+export type CheckStatus = "ok" | "warn" | "error" | "wait";
+export type LoadingCheck = { key: string; title: string; status: CheckStatus; detail: string; hint: string | null };
+
+export type StageStatus = "done" | "running" | "waiting" | "paused" | "error" | "off";
+export type LoadingStage = {
+  key: string;
+  title: string;
+  detail: string;
+  status: StageStatus;
+  done: number | null;
+  total: number | null;
+  failed: number;
+  estimated: boolean; // the total is partly estimated (photo lists not read yet)
+  eta_seconds: number | null;
+  progress?: number | null; // 0..1 of a running supplier sync, when it reports it
+  phase?: string | null; // what that sync is doing now
+  last_success_at?: string | null;
+  error?: string | null;
+};
+
+export type TrialStatus = "queued" | "running" | "done" | "interrupted";
+export type LoadingTrial = {
+  status: TrialStatus;
+  requested: number;
+  count?: number; // photos taken: fewer than requested when the catalog has fewer main photos
+  requested_at: string | null;
+  finished_at: string | null;
+  done?: number;
+  failed?: number;
+  seconds?: number;
+  ms_median?: number | null;
+  download_rps?: number;
+  image_workers?: number;
+  capacity: number | null; // photos per second the CPU keeps up with
+  ready?: number;
+  failed_photos?: number;
+  no_mark?: number;
+  visible_left?: number;
+};
+
+export type Loading = {
+  generated_at: string;
+  version: number;
+  settings: ImageSettings;
+  limits: { download_rps_max: number; supplier_rps: number; web_concurrency: number };
+  worker: {
+    alive: boolean;
+    heartbeat: string | null;
+    started_at: string | null;
+    activity: "starting" | "photos" | "idle" | "paused" | "trial" | null;
+    image_workers: number | null;
+    cpus: number | null;
+  };
+  overview: {
+    products: number;
+    in_stock: number;
+    stock_photos: number; // in-stock products that have photos
+    photos_done: number;
+    photos_total: number;
+    photos_estimated: boolean;
+    eta_seconds: number | null;
+  };
+  speed: { photos_per_second: number | null; source: "measured" | "expected"; last_10_min: number };
+  checks: LoadingCheck[];
+  stages: LoadingStage[];
+  trial: LoadingTrial | null;
+  quality: { checked: number; visible_left: number; no_mark: number; left_threshold: number };
+  failed: { total: number; reasons: { reason: string; count: number }[] };
+};
+
+export type LoadingPhoto = {
+  id: number;
+  sku: number;
+  name: string;
+  status: string;
+  wm_template: string | null;
+  wm_left: number | null;
+  error: string | null;
+  thumb: string | null;
+};

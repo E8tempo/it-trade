@@ -5,12 +5,26 @@ from typing import Any
 from sqlalchemy import Table
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db import SessionLocal
+from app.models import JobState
+
 _TRANSLIT = str.maketrans({
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh", "з": "z", "и": "i",
     "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t",
     "у": "u", "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "",
     "э": "e", "ю": "yu", "я": "ya",
 })
+
+
+async def job_progress(name: str, phase: str, share: float | None, detail: str | None = None) -> None:
+    """How far a running job is, for the admin panel: job_state.info until the job ends with its result.
+    `share` is None when it is not known how much is left (`detail` then tells what is done)."""
+    async with SessionLocal() as session:
+        st = await session.get(JobState, name)
+        if st is not None:
+            share = None if share is None else round(min(1.0, max(0.0, share)), 3)
+            st.info = {"phase": phase, "progress": share, "detail": detail}
+            await session.commit()
 
 
 def slugify(text: str, max_len: int = 120) -> str:

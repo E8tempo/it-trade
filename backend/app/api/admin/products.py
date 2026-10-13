@@ -79,7 +79,7 @@ def _out(p: Product) -> AdminProduct:
         qty=p.qty_central + p.qty_nearest,
         is_hidden=p.is_hidden,
         is_active=p.is_active,
-        image=image_url(get_settings().media_url, img.id, "sm", img.version) if show else None,
+        image=image_url(get_settings().media_url, img.id, "md", img.version) if show else None,
     )
 
 
@@ -156,7 +156,7 @@ async def update_product(sku: int, body: ProductPatch, session: Session, backgro
 async def requeue_images(body: RequeueIn, session: Session) -> dict[str, int]:
     """Process ready photos again (e.g. after the watermark templates were recalibrated).
     They stay visible until the new files are written."""
-    stmt = update(ProductImage).where(ProductImage.status == ImageStatus.ready).values(status=ImageStatus.stale)
+    stmt = update(ProductImage).where(ProductImage.status == ImageStatus.ready).values(status=ImageStatus.stale, attempts=0)
     if body.variant:
         stmt = stmt.where(ProductImage.wm_template.like(f"{body.variant}%"))
     res = await session.execute(stmt)

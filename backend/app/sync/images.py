@@ -9,16 +9,17 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
-from sqlalchemy import case, delete, or_, select, update
+from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import SessionLocal
 from app.images.gallery import copies, thumbnail
-from app.images.processing import delete_image_files, image_path, process_image
+from app.images.processing import VERSION, ProcessedImage, delete_image_files, image_path, process_image
 from app.models import Product, ProductImage
 from app.models.base import utcnow
 from app.models.catalog import VISIBLE_STATUSES, ImageStatus
+from app.site_settings import ImageSettings
 from app.supplier.client import SupplierClient, SupplierError, SupplierNotFound, SupplierUnavailable
 
 log = logging.getLogger(__name__)
@@ -123,28 +124,60 @@ async def replace_failed_main(session, sku: int) -> None:
     )
 
 
-async def next_pending(limit: int, *, include_out_of_stock: bool, gallery: bool = True) -> list[tuple[int, str]]:
-    """Main images of in-stock products first, then their other images (unless `gallery` is off:
-    those are then processed on first view), then out-of-stock products if requested."""
+async def next_pending(limit: int, cfg: ImageSettings, *, include_out_of_stock: bool = False) -> list[tuple[int, str]]:
+    """What the worker processes next, of in-stock products (then of out-of-stock ones if requested):
+    1. photos never processed: all main photos first, then all second photos, the third ones... up to
+       `cfg.per_product` (only the main ones unless `cfg.gallery`: the others then on the first view);
+    2. photos queued for processing again (stale), in the same order;
+    3. photos made by an older processing version, in the same order (if `cfg.reprocess`).
+    Each step is its own query bounded by status and position, so it walks the queue index: instant
+    while there is work, ~1 s over the whole catalog when there is none (the worker then looks less
+    often). A main photo further than the limit (the first ones broken at the supplier) is not taken:
+    it is processed when its product is first opened."""
+    steps = [ProductImage.status == ImageStatus.pending, ProductImage.status == ImageStatus.stale]
+    if cfg.reprocess:
+        old = or_(ProductImage.algo_version.is_(None), ProductImage.algo_version < VERSION)
+        steps.append(and_(ProductImage.status == ImageStatus.ready, old))
+    shown = ProductImage.position < (cfg.per_product if cfg.gallery else 1)
+    rows: list = []
     async with SessionLocal() as session:
-        base = (
-            select(ProductImage.id, ProductImage.source_url)
-            .join(Product, Product.sku == ProductImage.sku)
-            .where(ProductImage.status.in_((ImageStatus.pending, ImageStatus.stale)), ProductImage.attempts < MAX_ATTEMPTS)
-        )
-        # never processed first, re-processing of already shown photos after that
-        order = (case((ProductImage.status == ImageStatus.pending, 0), else_=1), ProductImage.position, ProductImage.id)
-        if not gallery:
-            base = base.where(ProductImage.position == 0)
-        rows = (await session.execute(base.where(Product.in_stock).order_by(*order).limit(limit))).all()
-        if not rows and include_out_of_stock:
-            rows = (await session.execute(base.order_by(*order).limit(limit))).all()
-        return [tuple(r) for r in rows]
+        for in_stock in (True, False) if include_out_of_stock else (True,):
+            for step in steps:
+                q = (
+                    select(ProductImage.id, ProductImage.source_url)
+                    .join(Product, Product.sku == ProductImage.sku)
+                    .where(step, shown, Product.is_active, Product.in_stock.is_(in_stock), ProductImage.attempts < MAX_ATTEMPTS)
+                    .order_by(ProductImage.position, ProductImage.id)
+                    .limit(limit - len(rows))
+                )
+                rows += (await session.execute(q)).all()
+                if len(rows) >= limit:
+                    return [tuple(r) for r in rows]
+    return [tuple(r) for r in rows]
 
 
-async def process_one(client: SupplierClient, pool: ProcessPoolExecutor | None, image_id: int, url: str) -> bool:
-    """Downloads, cleans and stores one photo. Raises SupplierUnavailable on network trouble
-    (the image stays queued and its attempts are not used up)."""
+async def pick_trial(n: int) -> list[tuple[int, str]]:
+    """`n` random main photos of in-stock products for a trial batch: ones not processed yet while
+    there are enough of them, then processed ones too (they are processed again)."""
+    base = (
+        select(ProductImage.id, ProductImage.source_url)
+        .join(Product, Product.main_image_id == ProductImage.id)
+        .where(Product.is_active, Product.in_stock)
+        .order_by(func.random())
+    )
+    async with SessionLocal() as session:
+        rows = (await session.execute(base.where(ProductImage.status == ImageStatus.pending).limit(n))).all()
+        if len(rows) < n:
+            more = base.where(ProductImage.status.in_(VISIBLE_STATUSES)).limit(n - len(rows))
+            rows += (await session.execute(more)).all()
+    return [tuple(r) for r in rows]
+
+
+async def process_one(
+    client: SupplierClient, pool: ProcessPoolExecutor | None, image_id: int, url: str
+) -> ProcessedImage | None:
+    """Downloads, cleans and stores one photo; None if that failed. Raises SupplierUnavailable on
+    network trouble (the image stays queued and its attempts are not used up)."""
     s = get_settings()
     try:
         data = await client.fetch_image(url, size="original")
@@ -162,23 +195,31 @@ async def process_one(client: SupplierClient, pool: ProcessPoolExecutor | None, 
                 img.attempts = MAX_ATTEMPTS if isinstance(e, SupplierNotFound) else img.attempts + 1
                 img.error = str(e)[:500]
                 if img.attempts >= MAX_ATTEMPTS:
-                    img.status = ImageStatus.failed
-                    await session.flush()
-                    await replace_failed_main(session, img.sku)
+                    if img.status in VISIBLE_STATUSES:
+                        img.status = ImageStatus.ready  # processed before: its files stay on the site
+                    else:
+                        img.status = ImageStatus.failed
+                        await session.flush()
+                        await replace_failed_main(session, img.sku)
                 await session.commit()
-        return False
+        return None
     async with SessionLocal() as session:
         await session.execute(
             update(ProductImage)
             .where(ProductImage.id == image_id)
             .values(
                 # re-processed files keep their paths: a new version changes the URL (?v=) past browser caches
-                version=case((ProductImage.status == ImageStatus.stale, ProductImage.version + 1), else_=ProductImage.version),
+                version=case(
+                    (ProductImage.status.in_(VISIBLE_STATUSES), ProductImage.version + 1), else_=ProductImage.version
+                ),
                 status=ImageStatus.ready,
                 width=res.width,
                 height=res.height,
                 wm_template=res.wm_template,
                 wm_score=res.wm_score,
+                wm_left=res.wm_left,
+                algo_version=VERSION,
+                attempts=0,
                 error=None,
                 processed_at=utcnow(),
             )
@@ -186,7 +227,7 @@ async def process_one(client: SupplierClient, pool: ProcessPoolExecutor | None, 
         if (sku := await session.scalar(select(ProductImage.sku).where(ProductImage.id == image_id))) is not None:
             await refresh_copies(session, sku)
         await session.commit()
-    return True
+    return res
 
 
 async def refresh_copies(session: AsyncSession, sku: int) -> int:
@@ -210,7 +251,7 @@ def _thumbnails(media_root: Path, ids: list[int]) -> dict[int, np.ndarray]:
     out = {}
     for image_id in ids:
         try:
-            with Image.open(image_path(media_root, image_id, "sm")) as im:
+            with Image.open(image_path(media_root, image_id, "md")) as im:
                 out[image_id] = thumbnail(im)
         except OSError:  # the files are not written yet or were removed
             continue

@@ -47,12 +47,13 @@ class Settings(BaseSettings):
     media_root: Path = BASE_DIR / "data" / "media"
     media_url: str = "/media"
 
-    # Worker. Supplier image downloads are limited to 5/s in total (worker + on-demand in the API).
-    image_download_rps: float = 3.0
-    image_ondemand_rps: float = 0.75  # per API process
-    image_workers: int = 2  # CPU processes for watermark removal / encoding
+    # Worker. How many photos it loads, how fast and in what order is set in the admin panel
+    # (site_settings.ImageSettings); here only what depends on the server.
+    image_workers: int = 2  # CPU processes for watermark removal / encoding (~1 s of CPU per photo)
     image_prefetch_out_of_stock: bool = False  # otherwise processed on first view only
-    image_prefetch_gallery: bool = True  # all photos of a product, not only the main one (~5 per product)
+    # API processes (uvicorn --workers, see the Dockerfile): they share the supplier's photo downloads
+    # the worker leaves free, for photos opened on the site before the worker got to them
+    web_concurrency: int = 2
     stock_sync_interval_min: int = 30  # supplier limit: 10/hour
     catalog_sync_hour: int = 5  # local hour, after the supplier's nightly update
     timezone: str = "Europe/Simferopol"

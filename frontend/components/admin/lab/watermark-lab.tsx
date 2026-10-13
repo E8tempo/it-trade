@@ -2,7 +2,7 @@
 
 import { ImageUp, LoaderCircle, ZoomIn, ZoomOut } from "lucide-react";
 import Link from "next/link";
-import { useRef, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 
 import { CompareSlider } from "@/components/admin/lab/compare-slider";
 import { SamplePicker } from "@/components/admin/lab/sample-picker";
@@ -24,11 +24,11 @@ const VERDICT: Record<string, string> = {
 
 const fmt = (v: number, digits = 3) => v.toLocaleString("ru-RU", { maximumFractionDigits: digits, minimumFractionDigits: digits });
 
-export function WatermarkLab({ samples }: { samples: LabSampleGroup[] }) {
+export function WatermarkLab({ samples, initialImage }: { samples: LabSampleGroup[]; initialImage?: number | null }) {
   const [result, setResult] = useState<LabResult | null>(null);
   const [source, setSource] = useState<string>("");
-  const [activeId, setActiveId] = useState<number | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [activeId, setActiveId] = useState<number | null>(initialImage ?? null);
+  const [busy, setBusy] = useState(!!initialImage);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -58,6 +58,20 @@ export function WatermarkLab({ samples }: { samples: LabSampleGroup[] }) {
     setActiveId(s.image_id);
     run(body, `фото ${s.image_id} товара «${s.name}», арт. ${s.sku} (оригинал поставщика)`);
   };
+
+  // a photo linked from another page (the loading page): /admin/lab/watermark?image=ID
+  useEffect(() => {
+    if (!initialImage) return;
+    const body = new FormData();
+    body.set("image_id", String(initialImage));
+    api<LabResult>("/api/admin/lab/watermark", { method: "POST", body })
+      .then((r) => {
+        setResult(r);
+        setSource(`фото ${initialImage} (оригинал поставщика)`);
+      })
+      .catch((e) => setError(apiErrorText(e)))
+      .finally(() => setBusy(false));
+  }, [initialImage]);
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragging(false);

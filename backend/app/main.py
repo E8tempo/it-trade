@@ -16,7 +16,9 @@ async def lifespan(app: FastAPI):
     s.media_root.mkdir(parents=True, exist_ok=True)
     async with SessionLocal() as session:
         await ensure_admin(session)
-    async with SupplierClient(s, image_rps=s.image_ondemand_rps) as client:
+    # photos opened on the site before the worker processed them; the rate is set from the
+    # photo loading settings before each download (api/media.py: ondemand_client)
+    async with SupplierClient(s) as client:
         app.state.ondemand_client = client
         yield
     await engine.dispose()

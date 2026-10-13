@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,11 @@ class SupplierUnavailable(SupplierError):
     """Network trouble (timeouts, refused connections): not the request's fault, retry later."""
 
 
+# Photo downloads the supplier allows per second, in total: the worker takes its share (set in the admin
+# panel) and the API processes split the rest for photos opened on the site before the worker got to them.
+IMAGE_RPS_LIMIT = 5.0
+
+
 class RateLimiter:
     """Allows at most one call per `interval` seconds (shared by all coroutines of the process)."""
 
@@ -32,6 +38,9 @@ class RateLimiter:
         self.interval = 1.0 / per_second
         self._lock = asyncio.Lock()
         self._next = 0.0
+
+    def set_rate(self, per_second: float) -> None:
+        self.interval = 1.0 / per_second
 
     async def __aenter__(self):
         async with self._lock:
@@ -46,7 +55,7 @@ class RateLimiter:
 
 class SupplierClient:
     # Documented limits: login 10/min, images list 2/s, image download 5/s, order items 1/s.
-    def __init__(self, settings: Settings | None = None, *, image_rps: float | None = None):
+    def __init__(self, settings: Settings | None = None, *, image_rps: float = 1.0):
         self.s = settings or get_settings()
         self._http = httpx.AsyncClient(
             base_url=self.s.supplier_base_url,
@@ -58,7 +67,15 @@ class SupplierClient:
         self._login_lock = asyncio.Lock()
         self._login_limit = RateLimiter(10 / 60)
         self._rpc_limit = RateLimiter(2)
-        self._image_limit = RateLimiter(image_rps or self.s.image_download_rps)
+        self._image_limit = RateLimiter(image_rps)
+
+    @property
+    def image_rps(self) -> float:
+        return 1.0 / self._image_limit.interval
+
+    def set_image_rps(self, rps: float) -> None:
+        """Photo downloads per second of this client (the worker's or one API process's share)."""
+        self._image_limit.set_rate(rps)
 
     async def aclose(self):
         await self._http.aclose()
@@ -155,21 +172,27 @@ class SupplierClient:
         # Catalog files are currently public, but the docs require the session cookie.
         return {"session": await self.session()} if self.has_credentials else {}
 
-    async def download(self, path: str, dest: Path) -> Path:
-        """Stream a static file (catalog_tree / products json) to disk."""
+    async def download(self, path: str, dest: Path, progress: Callable[[int, int], Awaitable[None]] | None = None) -> Path:
+        """Stream a static file (catalog_tree / products json) to disk; `progress` gets the bytes done and
+        the size (0 when the server does not tell it) every few megabytes."""
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".part")
         async with self._http.stream("GET", path, cookies=await self._cookies(), timeout=600) as r:
             if r.status_code != 200:
                 raise SupplierError(f"GET {path}: HTTP {r.status_code}")
+            size, done, reported = int(r.headers.get("content-length") or 0), 0, 0
             with tmp.open("wb") as f:
                 async for chunk in r.aiter_bytes(1 << 20):
                     f.write(chunk)
+                    done += len(chunk)
+                    if progress and done - reported >= 5 << 20:
+                        reported = done
+                        await progress(done, size)
         tmp.replace(dest)
         return dest
 
     async def fetch_image(self, url: str, size: str = "large") -> bytes:
-        """Download a product image (limit 5/s, shared between worker and on-demand requests)."""
+        """Download a product image (IMAGE_RPS_LIMIT, shared between the worker and the API processes)."""
         async with self._image_limit:
             try:
                 r = await self._http.get("/" + url.lstrip("/"), params={"size": size}, cookies=await self._cookies())
