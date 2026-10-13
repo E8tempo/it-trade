@@ -70,6 +70,7 @@ def analyze(data: bytes) -> dict:
         "left": rm.mark_left(clean, removed),
     }
     result["plain"] = trace.get("plain", {"share": 0.0, "max": 0.0})
+    result["outline"] = trace.get("outline")
     result["fit"] = {
         "pixels": fit.get("pixels", 0),
         "grey": rm.color,
@@ -95,6 +96,7 @@ def _det(d: Detection) -> dict:
         "strength": d.strength,
         "layers": d.layers,
         "opacity": d.opacity,
+        "outline": d.outline,
         "color": d.color,
     }
 

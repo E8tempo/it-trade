@@ -2,6 +2,7 @@
 
 import {
   BookOpen,
+  CloudDownload,
   ExternalLink,
   FlaskConical,
   LayoutDashboard,
@@ -27,6 +28,7 @@ const NAV = [
   { href: "/admin/orders", label: "Заказы", icon: ShoppingBag },
   { href: "/admin/products", label: "Товары и цены", icon: Package },
   { href: "/admin/pricing", label: "Наценки", icon: Percent },
+  { href: "/admin/loading", label: "Загрузка каталога", icon: CloudDownload },
   { href: "/admin/lab", label: "Лаборатория", icon: FlaskConical },
   { href: "/admin/docs", label: "Как это работает", icon: BookOpen },
   { href: "/admin/settings", label: "Настройки", icon: Settings },

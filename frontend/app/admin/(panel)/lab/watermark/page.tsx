@@ -5,12 +5,12 @@ import { Suspense } from "react";
 import { WatermarkLab } from "@/components/admin/lab/watermark-lab";
 import { PageHeader } from "@/components/admin/ui";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { LabSample } from "@/lib/admin/types";
+import type { LabSampleGroup } from "@/lib/admin/types";
 import { apiServer } from "@/lib/api/server";
 
 export const metadata: Metadata = { title: "Лаборатория: водяной знак" };
 
-export default function WatermarkLabPage() {
+export default function WatermarkLabPage({ searchParams }: PageProps<"/admin/lab/watermark">) {
   return (
     <>
       <Link href="/admin/lab" className="mb-3 inline-block text-sm text-muted-foreground hover:text-foreground">
@@ -30,13 +30,14 @@ export default function WatermarkLabPage() {
         }
       />
       <Suspense fallback={<Skeleton className="h-80 rounded-2xl" />}>
-        <LabContent />
+        <LabContent searchParams={searchParams} />
       </Suspense>
     </>
   );
 }
 
-async function LabContent() {
-  const samples = await apiServer<LabSample[]>("/api/admin/lab/watermark/samples");
-  return <WatermarkLab samples={samples} />;
+async function LabContent({ searchParams }: Pick<PageProps<"/admin/lab/watermark">, "searchParams">) {
+  const image = Number((await searchParams).image) || null;
+  const samples = await apiServer<LabSampleGroup[]>("/api/admin/lab/watermark/samples");
+  return <WatermarkLab samples={samples} initialImage={image} />;
 }

@@ -12,6 +12,12 @@ inpainted from the pixels around the strokes, and per template pixel the estimat
 are combined into a weighted mean, weight ((B - W) / (255 - W))^2: a white background counts 1.
 A second pass repeats the mean without the estimates further than 2.5 spreads from the first one
 (the edge of a product, a highlight). Pixels with too little evidence keep the current value.
+
+The letters also have a thin near-black outline, which over a white background looks like denser grey and
+so ends up in these alphas. It shows over dark backgrounds only, so the layer model is calibrated separately
+(`layer_curve`): pixels of the same template alpha are pooled over all images, with backgrounds of any
+brightness, and J = t*B + h is fitted per alpha bin. The result t(a) and c(a) = h / W is stored with the
+templates (see watermark.CURVE_KEYS).
 """
 
 import logging
@@ -22,7 +28,16 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from app.images.watermark import VARIANTS, Detection, WatermarkRemover, calibrated_file, default_remover, luma
+from app.images.watermark import (
+    CURVE_KEYS,
+    VARIANTS,
+    Curve,
+    Detection,
+    WatermarkRemover,
+    calibrated_file,
+    default_remover,
+    luma,
+)
 
 log = logging.getLogger(__name__)
 MARGIN = 6
@@ -33,6 +48,9 @@ SMOOTH_STD = 3.0  # maximal spread of the surroundings, luma levels
 WINDOW = 15
 OUTLIER_SPREADS = 2.5
 COLOUR_TOLERANCE = 8.0  # single grey layer only: darker / stacked marks would distort the shape
+CURVE_STEP = 0.01  # alpha bin of the layer curve
+CURVE_MIN_WEIGHT = 2000  # pixels a bin needs
+CURVE_MIN_SPREAD = 40.0  # luma spread of the backgrounds a bin needs, darker and lighter ones both
 
 
 def _rgb(path: Path) -> np.ndarray | None:
@@ -125,6 +143,63 @@ def estimate(rm: WatermarkRemover, items: list[tuple[Path, Detection]], current:
     return new[MARGIN:-MARGIN, MARGIN:-MARGIN].astype(np.float32), used, covered
 
 
+def _background(rm: WatermarkRemover, rgb: np.ndarray, det: Detection) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """(J, B, alpha) of the pixels whose surroundings are smooth, of a single grey layer, None if unusable."""
+    _, removed = rm.remove(rgb, det)
+    if removed is None or removed.layers != 1 or removed.opacity != 1.0 or removed.dx or removed.dy:
+        return None
+    if abs((removed.color or 0) - rm.color) > COLOUR_TOLERANCE:
+        return None
+    t = rm.template(det.template).alpha
+    th, tw = t.shape
+    x, y = removed.x, removed.y
+    if x < MARGIN or y < MARGIN or y + th + MARGIN > rgb.shape[0] or x + tw + MARGIN > rgb.shape[1]:
+        return None
+    J = luma(rgb[y - MARGIN : y + th + MARGIN, x - MARGIN : x + tw + MARGIN])
+    a = np.pad(t, MARGIN)
+    strokes = cv2.dilate((a > 0.002).astype(np.uint8), np.ones((3, 3), np.uint8))
+    B = cv2.inpaint(np.clip(J, 0, 255).astype(np.uint8), strokes, 4, cv2.INPAINT_TELEA).astype(np.float32)
+    clean = (strokes == 0).astype(np.float32)
+    n = cv2.boxFilter(clean, -1, (WINDOW, WINDOW), normalize=False)
+    s1 = cv2.boxFilter(J * clean, -1, (WINDOW, WINDOW), normalize=False)
+    s2 = cv2.boxFilter(J * J * clean, -1, (WINDOW, WINDOW), normalize=False)
+    with np.errstate(all="ignore"):
+        mean = s1 / n
+        std = np.sqrt(np.maximum(s2 / n - mean * mean, 0))
+    usable = (n >= 3 * WINDOW) & (std <= SMOOTH_STD - 0.5) & (B < 250) & (J < 252) & (a > 0)
+    return J[usable], B[usable], a[usable]
+
+
+def layer_curve(rm: WatermarkRemover, groups: dict[str, list[tuple[Path, Detection]]]) -> Curve:
+    """t(a), c(a) of one layer pooled over all variants, None without enough dark and light backgrounds."""
+    a_max = max(float(t.alpha.max()) for t in rm.templates)
+    bins = int(np.ceil(a_max / CURVE_STEP))
+    sums = np.zeros((6, bins))  # n, B, J, BB, BJ, a
+    for items in groups.values():
+        for f, det in items:
+            rgb = _rgb(f)
+            if rgb is None or (got := _background(rm, rgb, det)) is None:
+                continue
+            J, B, a = (v.astype(np.float64) for v in got)
+            k = np.minimum((a / CURVE_STEP).astype(int), bins - 1)
+            for i, v in enumerate((np.ones_like(a), B, J, B * B, B * J, a)):
+                sums[i] += np.bincount(k, v, bins)
+    n, sB, sJ, sBB, sBJ, sa = sums
+    with np.errstate(all="ignore"):
+        var = sBB / n - (sB / n) ** 2
+        t = (sBJ / n - (sB / n) * (sJ / n)) / var
+        h = sJ / n - t * sB / n
+    ok = (n >= CURVE_MIN_WEIGHT) & (np.sqrt(np.maximum(var, 0)) >= CURVE_MIN_SPREAD)
+    if ok.sum() < 0.8 * bins:
+        return None
+    a_c = np.concatenate([[0.0], sa[ok] / n[ok]])
+    t_c = np.concatenate([[1.0], t[ok]])
+    c_c = np.concatenate([[0.0], h[ok] / rm.color])
+    for v in (t_c, c_c):  # light smoothing of the bin noise
+        v[1:-1] = (v[:-2] + v[1:-1] + v[2:]) / 3
+    return a_c.astype(np.float32), t_c.astype(np.float32), np.maximum(c_c, 0).astype(np.float32)
+
+
 def calibrate(folder: Path, out: Path | None = None, rm: WatermarkRemover | None = None) -> dict[str, int]:
     """Writes the templates to the media volume (picked up after a restart of api/worker)."""
     out = out or calibrated_file()
@@ -146,5 +221,10 @@ def calibrate(folder: Path, out: Path | None = None, rm: WatermarkRemover | None
         else:
             log.info("%s: %d images, %.0f%% of the strokes re-estimated", name, used[name], covered * 100)
         alphas[name] = alpha
-    np.savez_compressed(out, **alphas, W=np.float32(rm.color))
+    curve = layer_curve(rm, groups)
+    if curve is None:
+        log.warning("layer curve: too few dark and light backgrounds, keeping the current one")
+        curve = rm.curve
+    extra = dict(zip(CURVE_KEYS, curve, strict=True)) if curve is not None else {}
+    np.savez_compressed(out, **alphas, W=np.float32(rm.color), **extra)
     return used

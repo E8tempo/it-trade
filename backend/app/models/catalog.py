@@ -121,9 +121,17 @@ class ProductImage(Base):
     height: Mapped[int | None]
     wm_template: Mapped[str | None] = mapped_column(String(32))  # which watermark variant was removed
     wm_score: Mapped[float | None]  # detection confidence
+    # mark left after the removal, luma levels per unit of alpha: ~0..3 clean, above ~10 the letters show
+    wm_left: Mapped[float | None]
     duplicate_of: Mapped[int | None]  # a larger copy of this photo shown instead, see images/gallery.py
     processed_at: Mapped[datetime | None]
+    # processing version that made the files (images/processing.VERSION); older ones are processed again
+    algo_version: Mapped[int | None]
 
     product: Mapped[Product] = relationship(back_populates="images", foreign_keys=[sku])
 
-    __table_args__ = (Index("ix_product_images_queue", "status", "position", "id"),)
+    __table_args__ = (
+        Index("ix_product_images_queue", "status", "position", "id"),
+        Index("ix_product_images_algo_version", "algo_version"),
+        Index("ix_product_images_processed_at", "processed_at"),
+    )

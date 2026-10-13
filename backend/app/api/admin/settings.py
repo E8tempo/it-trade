@@ -3,6 +3,7 @@
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from pydantic import ValidationError
 
 from app.api.admin.common import Session
 from app.api.catalog import clear_caches
@@ -21,7 +22,10 @@ async def get_setting(key: str, session: Session) -> dict[str, Any]:
 @router.put("/settings/{key}")
 async def put_setting(key: str, body: dict[str, Any], session: Session, background: BackgroundTasks) -> dict[str, Any]:
     model = SETTINGS.get(key) or _404()
-    obj = model.model_validate(body)
+    try:
+        obj = model.model_validate(body)
+    except ValidationError as e:
+        raise HTTPException(422, e.errors(include_url=False, include_context=False, include_input=False)) from e
     await save_settings_obj(session, obj)
     await session.commit()
     if model is PricingSettings:

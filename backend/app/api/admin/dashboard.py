@@ -12,8 +12,10 @@ from app.api.admin.common import Session
 from app.api.admin.orders import list_item
 from app.models import JobState, Order, OrderStatus, Product, ProductImage
 from app.models.base import utcnow
+from app.worker import TRIAL, WORKER
 
 router = APIRouter()
+NOT_JOBS = (WORKER, TRIAL)  # job_state rows that are not supplier syncs
 
 
 def _jobs(rows) -> list[dict[str, Any]]:
@@ -32,7 +34,7 @@ def _jobs(rows) -> list[dict[str, Any]]:
 
 @router.get("/status")
 async def sync_status(session: Session) -> dict[str, Any]:
-    jobs = (await session.scalars(select(JobState))).all()
+    jobs = (await session.scalars(select(JobState).where(JobState.name.not_in(NOT_JOBS)))).all()
     images = dict((await session.execute(select(ProductImage.status, func.count()).group_by(ProductImage.status))).all())
     products = (
         await session.execute(select(func.count(), func.count().filter(Product.in_stock)).where(Product.is_active))
@@ -75,7 +77,7 @@ async def dashboard(session: Session) -> dict[str, Any]:
         )
     ).one()
     recent = await session.scalars(select(Order).options(selectinload(Order.items)).order_by(Order.id.desc()).limit(6))
-    jobs = (await session.scalars(select(JobState).order_by(JobState.name))).all()
+    jobs = (await session.scalars(select(JobState).where(JobState.name.not_in(NOT_JOBS)).order_by(JobState.name))).all()
     return {
         "products": {
             "active": p[0],

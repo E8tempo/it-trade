@@ -104,7 +104,14 @@ async function DashboardContent() {
           </ul>
         </Panel>
 
-        <Panel title="Фото товаров">
+        <Panel
+          title="Фото товаров"
+          action={
+            <Link href="/admin/loading" className="text-sm text-primary hover:underline">
+              Загрузка каталога
+            </Link>
+          }
+        >
           <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
             {Object.entries(IMAGE_STATUS).map(([k, label]) => (
               <div key={k}>

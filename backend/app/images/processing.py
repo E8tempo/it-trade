@@ -4,6 +4,7 @@ Runs in a process pool (`process_image` only takes/returns plain data).
 """
 
 import io
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,8 +14,12 @@ from PIL.JpegImagePlugin import get_sampling
 
 from app.images.watermark import default_remover
 
-# Longest side of the generated variants: product page / listing card (2x for retina) / cart & search.
-SIZES = {"lg": 1000, "md": 480, "sm": 160}
+# Version of the processing (watermark removal and the files made), stored with every photo. Bump it
+# when the result changes and describe it in the "Версии снятия знака" article (v6 there = 6 here):
+# photos of older versions are then processed again in the background, after the new ones.
+VERSION = 6
+# Longest side of the generated variants: product page / listing cards, cart and search (2x for retina).
+SIZES = {"lg": 1000, "md": 480}
 WEBP_QUALITY = 82
 _SUBSAMPLING = {0: (1, 1), 1: (2, 1), 2: (2, 2)}
 T = Image.Transpose
@@ -28,6 +33,8 @@ class ProcessedImage:
     height: int
     wm_template: str | None
     wm_score: float | None
+    wm_left: float | None  # mark left after the removal, see WatermarkRemover.mark_left
+    ms: int  # time the processing took (in a process of the pool: CPU work, no waiting for downloads)
 
 
 def image_path(media_root: Path, image_id: int, size: str) -> Path:
@@ -49,12 +56,15 @@ def _flatten(im: Image.Image) -> Image.Image:
 
 def process_image(data: bytes, media_root: str, image_id: int) -> ProcessedImage:
     """Removes the watermark from a supplier image and writes all WebP sizes atomically."""
+    started = time.perf_counter()
     im = Image.open(io.BytesIO(data))
     sub = _SUBSAMPLING.get(get_sampling(im), (2, 2)) if im.format == "JPEG" else (1, 1)
     im.load()
     # The supplier draws the watermark on the stored pixels, so no EXIF rotation before removal.
     rgb = np.asarray(_flatten(im))
-    clean, det = default_remover().remove(rgb, chroma_subsampling=sub)
+    remover = default_remover()
+    clean, det = remover.remove(rgb, chroma_subsampling=sub)
+    left = remover.mark_left(clean, det) if det else None
 
     out = Image.fromarray(clean)
     if transpose := _EXIF_TRANSPOSE.get(im.getexif().get(0x0112, 1)):
@@ -74,6 +84,8 @@ def process_image(data: bytes, media_root: str, image_id: int) -> ProcessedImage
         height=out.height,
         wm_template=_variant_label(det) if det else None,
         wm_score=round(det.score, 4) if det else None,
+        wm_left=round(left, 2) if left is not None and np.isfinite(left) else None,
+        ms=round(1000 * (time.perf_counter() - started)),
     )
 
 

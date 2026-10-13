@@ -4,6 +4,7 @@ import heapq
 import logging
 import tempfile
 from collections import defaultdict, deque
+from collections.abc import Awaitable, Callable
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -15,10 +16,11 @@ from app.db import SessionLocal
 from app.models import Category, Product
 from app.models.base import utcnow
 from app.supplier.client import SupplierClient
-from app.sync.common import slugify, upsert
+from app.sync.common import job_progress, slugify, upsert
 
 log = logging.getLogger(__name__)
 BATCH = 2000
+PROGRESS_EVERY = 20000  # products read between progress reports
 
 UPDATE_COLS = [
     "category_id", "name", "slug", "part", "vendor", "description", "barcodes", "weight", "volume",
@@ -112,7 +114,11 @@ def spread_sample(sample: dict[int, list[SampleEntry]], root_of: dict[int, int],
 
 
 async def import_products_file(
-    path: Path, sample_per_category: int = 0, prefer: set[int] | None = None, sample_limit: int = 0
+    path: Path,
+    sample_per_category: int = 0,
+    prefer: set[int] | None = None,
+    sample_limit: int = 0,
+    progress: Callable[[float], Awaitable[None]] | None = None,
 ) -> dict:
     """Upserts the supplier catalog; products missing from it are deactivated.
 
@@ -132,8 +138,11 @@ async def import_products_file(
     batch: list[dict] = []
     seen: set[int] = set()
     sample: defaultdict[int, list[tuple[tuple[bool, int], dict]]] = defaultdict(list)
+    size = path.stat().st_size or 1
     with path.open("rb") as f:
-        for item in ijson.items(f, "item", use_float=True):
+        for k, item in enumerate(ijson.items(f, "item", use_float=True), 1):
+            if progress and k % PROGRESS_EVERY == 0:
+                await progress(f.tell() / size)  # ijson reads ahead in small chunks: close enough
             row = product_row(item, categories, now)
             if row is None or row["sku"] in seen:
                 continue
@@ -187,5 +196,9 @@ async def sync_products(client: SupplierClient) -> dict:
     # a dev sample prefers in-stock products (one extra get_active_products call, limit 10/hour)
     prefer = {it["sku"] for it in await client.get_active_products()} if (n or limit) and client.has_credentials else None
     with tempfile.TemporaryDirectory() as tmp:
-        f = await client.download(f"/download/catalog/json/products_{client.s.supplier_pricelist}.json", Path(tmp) / "products.json")
-        return await import_products_file(f, n, prefer, limit)
+        f = await client.download(
+            f"/download/catalog/json/products_{client.s.supplier_pricelist}.json",
+            Path(tmp) / "products.json",
+            progress=lambda done, size: job_progress("products", "download", done / size if size else None, f"{done >> 20} МБ"),
+        )
+        return await import_products_file(f, n, prefer, limit, progress=lambda share: job_progress("products", "import", share))

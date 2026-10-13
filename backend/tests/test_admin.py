@@ -9,7 +9,8 @@ from test_watermark import apply_watermark, expected_detection, synthetic_photo
 from app.auth import ensure_admin
 from app.db import SessionLocal
 from app.images.watermark import default_remover
-from app.models import Category, Product
+from app.models import Category, Product, ProductImage
+from app.models.catalog import ImageStatus
 from app.sync.stock import apply_stock
 
 
@@ -131,3 +132,34 @@ async def test_watermark_lab(admin):
     assert d["detection"] is None and d["candidates"]
     r = await admin.post("/api/admin/lab/watermark", files={"file": ("x.txt", b"not an image", "text/plain")})
     assert r.status_code == 422
+
+
+async def test_lab_samples(admin):
+    async with SessionLocal() as s:
+        for i in range(12):  # 9 photos with the big mark, 3 without; products 10, 11, 12 in turn
+            status = ImageStatus.stale if i == 1 else ImageStatus.ready
+            s.add(ProductImage(id=500 + i, sku=10 + i % 3, source_url=f"/p/{i}.jpg", status=status, wm_template="big" if i % 4 else None))
+        s.add(ProductImage(id=600, sku=10, source_url="/p/x.jpg", status=ImageStatus.pending, wm_template="big"))  # no files yet
+        await s.commit()
+    url = "/api/admin/lab/watermark/samples"
+
+    groups = (await admin.get(url, params={"per_variant": 5})).json()
+    assert [(g["variant"], g["total"], len(g["items"])) for g in groups] == [("big", 9, 5), ("none", 3, 3)]
+    first = [x["image_id"] for x in groups[0]["items"]]
+    assert first == [511, 510, 509, 507, 506]  # newest first
+
+    rest = (await admin.get(url, params={"per_variant": 5, "variant": "big", "offset": 5})).json()
+    assert [x["image_id"] for x in rest[0]["items"]] == [505, 503, 502, 501]
+
+    # shuffled: another order, and paging through it with the same seed gives every photo once
+    pages = [(await admin.get(url, params={"per_variant": 5, "variant": "big", "seed": 7, "offset": o})).json() for o in (0, 5)]
+    shuffled = [x["image_id"] for page in pages for x in page[0]["items"]]
+    assert sorted(shuffled) == sorted(first + [505, 503, 502, 501]) and shuffled[:5] != first
+
+    by_name = (await admin.get(url, params={"q": "МЫШЬ"})).json()  # product 12, case-insensitive
+    assert {x["sku"] for g in by_name for x in g["items"]} == {12}
+    by_photo = (await admin.get(url, params={"q": "503"})).json()
+    assert [x["image_id"] for g in by_photo for x in g["items"]] == [503]
+    by_sku = (await admin.get(url, params={"q": "11"})).json()
+    assert {x["sku"] for g in by_sku for x in g["items"]} == {11}
+    assert (await admin.get(url, params={"q": "нет такого"})).json() == []
