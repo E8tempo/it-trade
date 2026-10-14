@@ -8,6 +8,11 @@ export type OrderStatus = "new" | "confirmed" | "ordered" | "ready" | "shipped" 
 export type OrderSource = "site" | "phone" | "admin";
 export type DeliveryMethod = "pickup" | "courier" | "transport";
 
+// Every product has 4 prices: who buys (retail customers / B2B companies) x how they pay.
+export type Audience = "retail" | "wholesale";
+export type PaymentMethod = "cash" | "cashless";
+export type PriceType = `${Audience}_${PaymentMethod}`;
+
 export type OrderListItem = {
   id: number;
   number: string;
@@ -18,6 +23,10 @@ export type OrderListItem = {
   total: number;
   items_count: number;
   created_at: string;
+  payment_method: PaymentMethod;
+  price_type: PriceType; // prices of new lines; the lines keep the prices they were added with
+  user_id: number | null; // the customer's account on the site
+  buyer_name: string | null; // the organization it was bought for
 };
 
 export type OrderItem = {
@@ -34,6 +43,8 @@ export type OrderItem = {
 export type OrderEvent = { id: number; at: string; status: OrderStatus | null; note: string | null; author: string | null };
 
 export type Order = OrderListItem & {
+  organization_id: number | null;
+  buyer: OrderBuyer | null; // requisites and contract as they were at checkout
   email: string | null;
   delivery: DeliveryMethod;
   city: string | null;
@@ -63,9 +74,10 @@ export type AdminProduct = {
   category: CategoryRef | null;
   supplier_price: number | null;
   rrp: number | null;
-  price: number | null;
-  price_override: number | null;
-  markup_percent: number | null;
+  price: number | null; // retail cash: the shop price
+  prices: Record<PriceType, number | null>;
+  price_overrides: Partial<Record<PriceType, number>>; // only the types with a fixed price
+  markup_percent: number | null; // of the retail cash price
   in_stock: boolean;
   qty: number;
   is_hidden: boolean;
@@ -73,16 +85,22 @@ export type AdminProduct = {
   image: string | null;
 };
 
-// Decimal fields of the settings come as strings from the API; the forms send numbers back.
+// Decimal fields of the settings come as strings from the API ("20.0"); the forms send numbers back.
 type Num = number | string;
 
-export type PricingSettings = {
+/** Markup rules of one price type. */
+export type PriceRules = {
   markup_percent: Num;
   category_markups: Record<string, Num>;
   min_markup: Num;
   round_to: number;
   use_rrp: boolean;
 };
+
+/** Markup rules of one supplier: one set per price type. */
+export type SupplierPricing = Record<PriceType, PriceRules>;
+
+export type AdminSupplier = { code: string; name: string; url: string; products: number; in_stock: number };
 
 export type ShopSettings = {
   name: string;
@@ -103,7 +121,6 @@ export type AdminCategory = {
   depth: number;
   product_count: number;
   is_hidden: boolean;
-  markup: number | null;
 };
 
 export type PricePreview = {
@@ -117,6 +134,7 @@ export type PricePreview = {
   margin: number;
   margin_percent: number;
   category_path: CategoryRef[];
+  by_type: Record<PriceType, number>; // the same purchase priced by every type (the tried rules for one, the saved for the rest)
 };
 
 export type PriceImpact = {
@@ -127,6 +145,7 @@ export type PriceImpact = {
   avg_markup_before: number;
   avg_markup_after: number;
   examples: { sku: number; name: string; supplier_price: number; before: number | null; after: number }[];
+  above_retail: number | null; // wholesale types: products whose new price is above the retail price of the same payment
 };
 
 export type Job = {
@@ -148,6 +167,7 @@ export type Dashboard = {
     revenue_30d: number;
     margin_30d: number;
   };
+  organizations: { pending: number }; // waiting for a manager's check
   recent_orders: OrderListItem[];
   jobs: Job[];
 };
@@ -296,3 +316,75 @@ export type LoadingPhoto = {
   error: string | null;
   thumb: string | null;
 };
+
+// --- organizations customers buy for (backend/app/api/admin/organizations.py) -----------------
+
+export type OrganizationStatus = "pending" | "approved" | "rejected";
+export type ContractTerms = "prepayment" | "deferred";
+
+export type ContractRef = {
+  id: number;
+  number: string;
+  signed_on: string; // YYYY-MM-DD
+  terms: ContractTerms;
+  deferral_days: number | null;
+};
+
+export type Contract = ContractRef & { is_active: boolean };
+export type ContractInput = Omit<Contract, "id">;
+
+export type OrganizationInput = { name: string; inn: string; kpp: string | null; ogrn: string | null; address: string | null };
+
+/** The organization an order was placed for and its contract, as they were at checkout. */
+export type OrderBuyer = OrganizationInput & { contract: ContractRef | null };
+
+/** A user of the site working for an organization. */
+export type Person = { id: number; email: string; name: string | null; phone: string | null };
+/** owner: the head (requisites, people, every order); buyer: a purchaser (catalog, cart, own orders) */
+export type MemberRole = "owner" | "buyer";
+export type Member = Person & { role: MemberRole; added_at: string };
+
+export type OrganizationListItem = {
+  id: number;
+  name: string;
+  inn: string;
+  kpp: string | null;
+  status: OrganizationStatus;
+  owner: Person | null; // its head
+  members: number;
+  contracts: number; // active ones
+  created_at: string;
+};
+
+export type OrganizationPage = Page<OrganizationListItem> & { counts: Partial<Record<OrganizationStatus, number>> };
+
+export type AdminOrganization = OrganizationInput & {
+  id: number;
+  status: OrganizationStatus;
+  review_note: string | null; // why it was rejected; the customer sees it
+  created_at: string;
+  updated_at: string;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
+  members: Member[];
+  contracts: Contract[];
+  orders: OrderListItem[]; // the latest ones placed for it
+};
+
+// --- news and promotions (backend/app/api/admin/posts.py) ----------------------------------------
+
+export type PostKind = "news" | "promo";
+
+export type AdminPost = {
+  id: number;
+  kind: PostKind;
+  title: string;
+  body: string;
+  link_url: string | null;
+  is_published: boolean;
+  published_at: string | null;
+  pinned: boolean;
+  ends_on: string | null; // a promotion's last day, YYYY-MM-DD
+};
+
+export type PostInput = Omit<AdminPost, "id" | "published_at">;

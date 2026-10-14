@@ -2,12 +2,52 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import ForeignKey, Index, Numeric, String, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import JSON, ForeignKey, Index, Numeric, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.models.base import Base, TimestampMixin
 
 Money = Numeric(12, 2)
+
+
+class Audience(StrEnum):
+    retail = "retail"
+    wholesale = "wholesale"  # B2B companies (stage 2)
+
+
+class PaymentMethod(StrEnum):
+    cash = "cash"
+    cashless = "cashless"  # a card on delivery or a bank transfer
+
+
+class PriceType(StrEnum):
+    """Every product has a price of each type, computed by that type's markup rules (app/pricing.py)."""
+
+    retail_cash = "retail_cash"
+    retail_cashless = "retail_cashless"
+    wholesale_cash = "wholesale_cash"
+    wholesale_cashless = "wholesale_cashless"
+
+    @property
+    def audience(self) -> Audience:
+        return Audience(self.value.split("_")[0])
+
+    @property
+    def payment(self) -> PaymentMethod:
+        return PaymentMethod(self.value.split("_")[1])
+
+
+def price_type(audience: Audience, payment: PaymentMethod) -> PriceType:
+    return PriceType(f"{audience}_{payment}")
+
+
+# Product column of each price type. Retail cash is `price`: the shop price of listings, sorting, filters and facets.
+PRICE_COLUMNS: dict[PriceType, str] = {
+    PriceType.retail_cash: "price",
+    PriceType.retail_cashless: "price_retail_cashless",
+    PriceType.wholesale_cash: "price_wholesale_cash",
+    PriceType.wholesale_cashless: "price_wholesale_cashless",
+}
 
 
 class Category(TimestampMixin, Base):
@@ -59,8 +99,14 @@ class Product(TimestampMixin, Base):
 
     # Stock & price (from get_active_products)
     supplier_price: Mapped[Decimal | None] = mapped_column(Money)
-    price: Mapped[Decimal | None] = mapped_column(Money)  # retail price: the override or the markup rules
-    price_override: Mapped[Decimal | None] = mapped_column(Money)  # fixed retail price set by admin
+    # The 4 prices (PRICE_COLUMNS): a fixed price of the type or that type's markup rules
+    price: Mapped[Decimal | None] = mapped_column(Money)  # retail cash
+    price_retail_cashless: Mapped[Decimal | None] = mapped_column(Money)
+    price_wholesale_cash: Mapped[Decimal | None] = mapped_column(Money)
+    price_wholesale_cashless: Mapped[Decimal | None] = mapped_column(Money)
+    # Fixed prices set by admin, {price type: "decimal string"}, NULL when there are none. Always assign a new
+    # dict: a plain JSON column does not notice changes made in place.
+    price_overrides: Mapped[dict[str, str] | None] = mapped_column(JSON(none_as_null=True))
     is_hidden: Mapped[bool] = mapped_column(default=False)  # hidden from the shop by admin
     qty_central: Mapped[int] = mapped_column(default=0)
     qty_nearest: Mapped[int] = mapped_column(default=0)
@@ -86,6 +132,16 @@ class Product(TimestampMixin, Base):
         Index("ix_products_listing", "category_id", "in_stock", "price"),
         Index("ix_products_in_stock_sku", "in_stock", "sku"),
     )
+
+    @validates("price_overrides")
+    def _empty_overrides_are_null(self, _key: str, value: dict[str, str] | None) -> dict[str, str] | None:
+        return value or None
+
+    def price_for(self, t: PriceType) -> Decimal | None:
+        return getattr(self, PRICE_COLUMNS[PriceType(t)])
+
+    def fixed_prices(self) -> dict[PriceType, Decimal]:
+        return {PriceType(t): Decimal(v) for t, v in (self.price_overrides or {}).items()}
 
 
 class ImageStatus(StrEnum):

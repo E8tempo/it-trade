@@ -49,7 +49,8 @@ export function LoginForm() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4 rounded-2xl bg-background p-6 shadow-sm ring-1 ring-foreground/10">
+    // method="post": if the page's JS fails to load, the browser must not put the password in the URL
+    <form method="post" onSubmit={onSubmit} className="space-y-4 rounded-2xl bg-background p-6 shadow-sm ring-1 ring-foreground/10">
       <div className="space-y-1.5">
         <Label htmlFor="email">E-mail</Label>
         <Input id="email" name="email" type="email" autoComplete="username" required className="h-10" />

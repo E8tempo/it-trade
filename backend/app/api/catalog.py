@@ -122,6 +122,9 @@ def _filtered(
     return stmt
 
 
+# The site sells to businesses only: the catalog shows no prices (a client's browser takes the prices of their
+# organization from /api/cart/prices). Sorting by price follows the retail cash price, which runs with the
+# wholesale ones (the same supplier prices, other markups) and has the listing index.
 SORTS = {
     "popular": (Product.in_stock.desc(), (Product.qty_central + Product.qty_nearest).desc(), Product.sku.desc()),
     "price_asc": (Product.in_stock.desc(), Product.price.asc().nulls_last(), Product.sku),
@@ -137,14 +140,12 @@ async def products(
     q: Annotated[str | None, Query(max_length=200)] = None,
     category: int | None = None,
     vendor: Annotated[list[str], Query()] = [],  # noqa: B006 - FastAPI query list
-    min_price: float | None = None,
-    max_price: float | None = None,
     sort: Literal["popular", "price_asc", "price_desc", "new", "name"] = "popular",
     page: Annotated[int, Query(ge=1, le=1000)] = 1,
     per_page: Annotated[int, Query(ge=1, le=96)] = 24,
     with_image: bool = False,  # only products whose main photo is ready (showcases)
     exclude: int | None = None,  # e.g. the current product in "similar products"
-    facets: bool = True,  # vendors and price range; off for search suggestions
+    facets: bool = True,  # vendors; off for search suggestions
 ):
     shop = await get_settings_obj(session, ShopSettings)
     path = None
@@ -153,13 +154,9 @@ async def products(
         if not c:
             raise HTTPException(404, "Category not found")
         path = c.path
-    vendors, pmin, pmax = await _facets(session, q, category, path, not shop.show_out_of_stock) if facets else ([], None, None)
+    vendors = await _facets(session, q, category, path, not shop.show_out_of_stock) if facets else []
 
     stmt = _filtered(q, category, path, vendor, not shop.show_out_of_stock)
-    if min_price is not None:
-        stmt = stmt.where(Product.price >= min_price)
-    if max_price is not None:
-        stmt = stmt.where(Product.price <= max_price)
     if with_image:
         stmt = stmt.where(
             exists().where(ProductImage.id == Product.main_image_id, ProductImage.status.in_(VISIBLE_STATUSES))
@@ -188,12 +185,10 @@ async def products(
         page=page,
         per_page=per_page,
         vendors=vendors,
-        price_min=pmin,
-        price_max=pmax,
     )
 
 
-_facet_cache: dict[tuple, tuple[float, tuple[list[VendorFacet], float | None, float | None]]] = {}
+_facet_cache: dict[tuple, tuple[float, list[VendorFacet]]] = {}
 FACET_TTL = 300.0
 
 
@@ -204,24 +199,15 @@ def clear_caches() -> None:
     _facet_cache.clear()
 
 
-async def _facets(
-    session: AsyncSession, q: str | None, category: int | None, path: str | None, in_stock: bool
-) -> tuple[list[VendorFacet], float | None, float | None]:
-    """Vendors and price range of the search/category, before vendor and price filters (cached)."""
+async def _facets(session: AsyncSession, q: str | None, category: int | None, path: str | None, in_stock: bool) -> list[VendorFacet]:
+    """Vendors of the search/category, before the vendor filter (cached)."""
     key = ((q or "").strip().lower(), category, in_stock)
     now = time.monotonic()
     if (hit := _facet_cache.get(key)) and now - hit[0] < FACET_TTL:
         return hit[1]
     sub = _filtered(q, category, path, [], in_stock).subquery()
-    rows = (
-        await session.execute(
-            select(sub.c.vendor, func.count(), func.min(sub.c.price), func.max(sub.c.price)).group_by(sub.c.vendor)
-        )
-    ).all()
-    vendors = sorted((VendorFacet(name=v, count=n) for v, n, _, _ in rows if v), key=lambda f: -f.count)[:50]
-    mins = [float(r[2]) for r in rows if r[2] is not None]
-    maxs = [float(r[3]) for r in rows if r[3] is not None]
-    result = (vendors, min(mins, default=None), max(maxs, default=None))
+    rows = (await session.execute(select(sub.c.vendor, func.count()).group_by(sub.c.vendor))).all()
+    result = sorted((VendorFacet(name=v, count=n) for v, n in rows if v), key=lambda f: -f.count)[:50]
     if len(_facet_cache) > 2000:
         _facet_cache.clear()
     _facet_cache[key] = (now, result)

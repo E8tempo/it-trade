@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     stock_sync_interval_min: int = 30  # supplier limit: 10/hour
     catalog_sync_hour: int = 5  # local hour, after the supplier's nightly update
     timezone: str = "Europe/Simferopol"
+
+    @field_validator("jwt_secret", mode="before")
+    @classmethod
+    def _empty_jwt_secret(cls, value: object) -> object:
+        # `JWT_SECRET=` left empty (a root .env copied from .env.example) means "not set";
+        # in production _check_prod still rejects it
+        return value or DEV_JWT_SECRET
 
     @model_validator(mode="after")
     def _check_prod(self) -> "Settings":

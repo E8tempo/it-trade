@@ -6,6 +6,7 @@ import { Pager, SearchInput } from "@/components/admin/list-controls";
 import { ProductsTable } from "@/components/admin/products-table";
 import { PageHeader, Panel } from "@/components/admin/ui";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DEFAULT_SUPPLIER } from "@/lib/admin/suppliers";
 import type { AdminProduct, Page } from "@/lib/admin/types";
 import { apiServer } from "@/lib/api/server";
 import { cn } from "@/lib/utils";
@@ -32,11 +33,11 @@ export default function ProductsPage({ searchParams }: Props) {
         title="Товары и цены"
         description={
           <>
-            Цена на сайте считается по{" "}
-            <Link href="/admin/pricing" className="text-primary hover:underline">
-              правилам наценок
-            </Link>{" "}
-            от закупочной цены поставщика. Для отдельного товара цену можно зафиксировать вручную или скрыть товар с сайта.
+            У товара четыре цены — розница и опт, за наличные и по безналу. Каждая считается от закупочной цены по{" "}
+            <Link href={`/admin/suppliers/${DEFAULT_SUPPLIER}`} className="text-primary hover:underline">
+              правилам поставщика
+            </Link>
+            . Любую из них можно зафиксировать для отдельного товара вручную, а товар — скрыть с сайта.
           </>
         }
       />

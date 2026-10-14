@@ -6,6 +6,9 @@ import type { NextConfig } from "next";
 const API_URL = process.env.API_URL ?? "http://localhost:8000";
 
 const nextConfig: NextConfig = {
+  // `next dev` blocks its scripts and HMR websocket for other hosts; let the site be opened
+  // from a phone or another computer on the local network (http://192.168.x.x:3000).
+  allowedDevOrigins: ["192.168.*.*", "10.*.*.*", "*.local"],
   async rewrites() {
     return [
       { source: "/api/:path*", destination: `${API_URL}/api/:path*` },

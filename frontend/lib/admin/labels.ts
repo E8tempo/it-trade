@@ -1,4 +1,4 @@
-import type { DeliveryMethod, OrderSource, OrderStatus } from "@/lib/admin/types";
+import type { Audience, ContractRef, DeliveryMethod, OrderSource, OrderStatus, OrganizationStatus, PaymentMethod } from "@/lib/admin/types";
 
 export const ORDER_STATUSES: { value: OrderStatus; label: string; tone: string }[] = [
   { value: "new", label: "Новый", tone: "bg-blue-500/12 text-blue-700" },
@@ -27,8 +27,30 @@ export const SOURCE: Record<OrderSource, string> = {
   admin: "Админка",
 };
 
+export const PAYMENT: Record<PaymentMethod, string> = { cash: "Наличные", cashless: "Безналичный расчёт" };
+export const PAYMENT_SHORT: Record<PaymentMethod, string> = { cash: "нал", cashless: "безнал" };
+
+export const AUDIENCE: Record<Audience, string> = { retail: "Розница", wholesale: "Опт" };
+
+export const ORG_STATUSES: { value: OrganizationStatus; label: string; tone: string }[] = [
+  { value: "pending", label: "На проверке", tone: "bg-amber-500/15 text-amber-800" },
+  { value: "approved", label: "Подтверждена", tone: "bg-emerald-500/12 text-emerald-700" },
+  { value: "rejected", label: "Отклонена", tone: "bg-red-500/10 text-red-700" },
+];
+
+export const ORG_STATUS = Object.fromEntries(ORG_STATUSES.map((s) => [s.value, s])) as Record<
+  OrganizationStatus,
+  (typeof ORG_STATUSES)[number]
+>;
+
+/** «предоплата», «отсрочка 14 дн.» */
+export function contractTerms(c: Pick<ContractRef, "terms" | "deferral_days">): string {
+  return c.terms === "deferred" && c.deferral_days ? `отсрочка ${c.deferral_days} дн.` : "предоплата";
+}
+
 const rub = new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 2 });
 const dateTime = new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeStyle: "short", timeZone: "Europe/Simferopol" });
+const dateOnly = new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeZone: "UTC" });
 
 export function money(value: number | string | null | undefined): string {
   return value == null ? "—" : rub.format(Number(value));
@@ -36,6 +58,11 @@ export function money(value: number | string | null | undefined): string {
 
 export function when(iso: string | null | undefined): string {
   return iso ? dateTime.format(new Date(iso)) : "—";
+}
+
+/** A calendar date without time ("2026-09-01" -> "01.09.2026"), the same in every time zone. */
+export function day(date: string | null | undefined): string {
+  return date ? dateOnly.format(new Date(`${date.slice(0, 10)}T00:00:00Z`)) : "—";
 }
 
 /** Watermark variant labels of the image pipeline ("big-rot-x2" -> "большой, повёрнут, 2 слоя"). */

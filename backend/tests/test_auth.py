@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 import pytest
-from conftest import reset_db
+from conftest import company_inn, register, reset_db
 
 import app.auth
 
@@ -21,7 +21,8 @@ def no_throttle():
 
 
 async def test_register_login_me_with_cookies_and_bearer(client):
-    r = await client.post("/api/auth/register", json={"email": " Ivan@Example.com ", "password": "secret-123", "name": "Иван"})
+    org = {"name": "ООО «Иван»", "inn": company_inn(9998)}
+    r = await client.post("/api/auth/register", json={"email": " Ivan@Example.com ", "password": "secret-123", "name": "Иван", "organization": org})
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["user"]["email"] == "ivan@example.com" and body["user"]["role"] == "customer"
@@ -38,7 +39,8 @@ async def test_register_login_me_with_cookies_and_bearer(client):
     me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {body['access_token']}"})
     assert me.status_code == 200
 
-    dup = await client.post("/api/auth/register", json={"email": "ivan@example.com", "password": "secret-123"})
+    org = {"name": "ООО «Другая»", "inn": company_inn(9999)}
+    dup = await client.post("/api/auth/register", json={"email": "ivan@example.com", "password": "secret-123", "organization": org})
     assert dup.status_code == 409
     bad = await client.post("/api/auth/login", json={"email": "ivan@example.com", "password": "wrong-pass"})
     assert bad.status_code == 401
@@ -47,8 +49,7 @@ async def test_register_login_me_with_cookies_and_bearer(client):
 
 
 async def test_refresh_rotation_and_reuse_detection(client, monkeypatch):
-    r = await client.post("/api/auth/register", json={"email": "rot@example.com", "password": "secret-123"})
-    first = r.json()["refresh_token"]
+    first = (await register(client, "rot@example.com"))["refresh_token"]
     client.cookies.clear()
 
     r = await client.post("/api/auth/refresh", json={"refresh_token": first})
@@ -68,7 +69,7 @@ async def test_refresh_rotation_and_reuse_detection(client, monkeypatch):
 
 
 async def test_refresh_via_cookie_and_logout(client):
-    await client.post("/api/auth/register", json={"email": "cookie@example.com", "password": "secret-123"})
+    await register(client, "cookie@example.com")
     r = await client.post("/api/auth/refresh")  # the refresh_token cookie is sent automatically
     assert r.status_code == 200
     refresh = r.json()["refresh_token"]
@@ -81,14 +82,14 @@ async def test_refresh_via_cookie_and_logout(client):
 
 
 async def test_access_token_cannot_be_used_as_refresh(client):
-    r = await client.post("/api/auth/register", json={"email": "type@example.com", "password": "secret-123"})
+    access = (await register(client, "type@example.com"))["access_token"]
     client.cookies.clear()
-    assert (await client.post("/api/auth/refresh", json={"refresh_token": r.json()["access_token"]})).status_code == 401
+    assert (await client.post("/api/auth/refresh", json={"refresh_token": access})).status_code == 401
 
 
 async def test_change_password_ends_other_sessions(client):
-    r = await client.post("/api/auth/register", json={"email": "pw@example.com", "password": "secret-123"})
-    old_refresh, access = r.json()["refresh_token"], r.json()["access_token"]
+    r = await register(client, "pw@example.com")
+    old_refresh, access = r["refresh_token"], r["access_token"]
     client.cookies.clear()
     h = {"Authorization": f"Bearer {access}"}
     wrong = await client.post("/api/auth/password", json={"current_password": "nope", "new_password": "secret-456"}, headers=h)
@@ -118,3 +119,19 @@ def test_prod_requires_strong_jwt_secret(monkeypatch):
         Settings(_env_file=None)
     monkeypatch.setenv("JWT_SECRET", "x" * 40)
     assert Settings(_env_file=None).secure_cookies is True
+
+
+def test_empty_jwt_secret_in_env_file_counts_as_unset(monkeypatch, tmp_path):
+    from pydantic import ValidationError
+
+    from app.config import DEV_JWT_SECRET, Settings
+
+    # the root .env copied from .env.example: `JWT_SECRET=` must not wipe out the dev secret
+    env = tmp_path / ".env"
+    env.write_text("JWT_SECRET=\n")
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    monkeypatch.setenv("APP_ENV", "dev")
+    assert Settings(_env_file=env).jwt_secret.get_secret_value() == DEV_JWT_SECRET
+    monkeypatch.setenv("APP_ENV", "prod")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=env)

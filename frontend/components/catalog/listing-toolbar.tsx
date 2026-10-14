@@ -8,14 +8,14 @@ import { useListing } from "@/components/catalog/listing-context";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
-import { countLabel, formatNumber } from "@/lib/format";
+import { countLabel } from "@/lib/format";
 import type { SortKey } from "@/lib/types";
 import { SORTS } from "@/lib/urls";
 import { cn } from "@/lib/utils";
 
 export function ListingToolbar({ total, ...facets }: FacetsProps & { total: number }) {
   const { query, navigate } = useListing();
-  const filterCount = query.vendors.length + (query.min !== undefined || query.max !== undefined ? 1 : 0);
+  const filterCount = query.vendors.length;
 
   return (
     <div className="mb-6 space-y-3">
@@ -50,10 +50,6 @@ function ActiveFilters() {
     label: v,
     remove: () => navigate({ vendors: query.vendors.filter((x) => x !== v) }),
   }));
-  if (query.min !== undefined || query.max !== undefined) {
-    const label = [query.min && `от ${formatNumber(query.min)}`, query.max && `до ${formatNumber(query.max)}`].filter(Boolean).join(" ");
-    chips.unshift({ label: `${label} ₽`, remove: () => navigate({ min: undefined, max: undefined }) });
-  }
   if (!chips.length) return null;
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -71,7 +67,7 @@ function ActiveFilters() {
       {chips.length > 1 && (
         <button
           type="button"
-          onClick={() => navigate({ vendors: [], min: undefined, max: undefined })}
+          onClick={() => navigate({ vendors: [] })}
           className="h-8 px-2 text-sm text-muted-foreground hover:text-foreground"
         >
           Сбросить всё
@@ -177,7 +173,7 @@ export function Pagination({ totalPages }: { totalPages: number }) {
 
 export function EmptyResults() {
   const { query, navigate } = useListing();
-  const filtered = query.vendors.length > 0 || query.min !== undefined || query.max !== undefined;
+  const filtered = query.vendors.length > 0;
   return (
     <div className="flex flex-col items-center rounded-3xl bg-muted/50 px-6 py-16 text-center">
       <p className="text-lg font-semibold">Ничего не нашлось</p>
@@ -185,7 +181,7 @@ export function EmptyResults() {
         {filtered ? "Попробуйте изменить или сбросить фильтры." : "Попробуйте изменить запрос или загляните в каталог."}
       </p>
       {filtered && (
-        <Button variant="outline" className="mt-5" onClick={() => navigate({ vendors: [], min: undefined, max: undefined })}>
+        <Button variant="outline" className="mt-5" onClick={() => navigate({ vendors: [] })}>
           Сбросить фильтры
         </Button>
       )}

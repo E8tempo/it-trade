@@ -90,8 +90,9 @@ export function CategoryMarkups({
             min={0}
             step="0.1"
             value={own ?? ""}
-            placeholder={String(inh.pct)}
+            placeholder={Number.isFinite(inh.pct) ? String(inh.pct) : ""}
             onChange={(e) => set(c.id, e.target.value)}
+            aria-invalid={own != null && !(own >= 0) ? true : undefined}
             className={cn("h-7 w-20 text-right tabular-nums", own != null && "border-primary/50 bg-primary/5")}
             aria-label={`Наценка для «${c.name}», %`}
             title={own != null ? "Своя наценка" : inh.from ? `Наследуется от «${inh.from}»` : "Общая наценка"}

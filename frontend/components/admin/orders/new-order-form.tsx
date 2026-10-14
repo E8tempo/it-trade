@@ -11,8 +11,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { SOURCE } from "@/lib/admin/labels";
-import type { Order, OrderSource } from "@/lib/admin/types";
+import { AUDIENCE, PAYMENT, SOURCE } from "@/lib/admin/labels";
+import { PRICE_TYPE, priceType } from "@/lib/admin/suppliers";
+import type { Audience, Order, OrderSource, PaymentMethod } from "@/lib/admin/types";
 import { apiErrorText } from "@/lib/admin/errors";
 import { api } from "@/lib/api/client";
 
@@ -30,9 +31,20 @@ export function NewOrderForm() {
   const [lines, setLines] = useState<Line[]>([]);
   const [delivery, setDelivery] = useState(0);
   const [discount, setDiscount] = useState(0);
+  const [payment, setPayment] = useState<PaymentMethod>("cash");
+  const [audience, setAudience] = useState<Audience>("retail");
   const [source, setSource] = useState<OrderSource>("phone");
   const [note, setNote] = useState("");
   const [pending, setPending] = useState(false);
+  const type = priceType(audience, payment);
+
+  // Lines picked from the catalog take the new type's price, unless their price was changed by hand.
+  function changeType(nextAudience: Audience, nextPayment: PaymentMethod) {
+    const next = priceType(nextAudience, nextPayment);
+    setLines((ls) => ls.map((l) => (l.prices && l.price === (l.prices[type] ?? 0) ? { ...l, price: l.prices[next] ?? 0 } : l)));
+    setAudience(nextAudience);
+    setPayment(nextPayment);
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -52,6 +64,8 @@ export function NewOrderForm() {
           comment: customer.comment || null,
           manager_note: note || null,
           source,
+          payment_method: payment,
+          audience,
           delivery_price: delivery,
           discount,
           items: lines.map((l) => ({ sku: l.sku, qty: l.qty, price: l.price })),
@@ -70,13 +84,48 @@ export function NewOrderForm() {
     <form onSubmit={submit} className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
       <div className="space-y-6">
         <Panel title="Товары">
-          <ItemsEditor lines={lines} onChange={setLines} />
+          <ItemsEditor lines={lines} onChange={setLines} priceType={type} />
         </Panel>
         <Panel title="Покупатель">
           <CustomerFields value={customer} onChange={setCustomer} />
         </Panel>
       </div>
       <div className="space-y-6">
+        <Panel title="Оплата и цены">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Оплата">
+              <Select items={PAYMENT} value={payment} onValueChange={(v) => v && changeType(audience, v as PaymentMethod)}>
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(PAYMENT).map(([k, label]) => (
+                    <SelectItem key={k} value={k}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Цены">
+              <Select items={AUDIENCE} value={audience} onValueChange={(v) => v && changeType(v as Audience, payment)}>
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(AUDIENCE).map(([k, label]) => (
+                    <SelectItem key={k} value={k}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Товары добавляются по цене «{PRICE_TYPE[type].label}» из каталога; цену можно изменить для этого заказа.
+          </p>
+        </Panel>
         <Panel title="Сумма">
           <div className="mb-4 grid grid-cols-2 gap-3">
             <Field label="Доставка, ₽">

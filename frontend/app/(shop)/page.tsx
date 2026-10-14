@@ -1,4 +1,4 @@
-import { ArrowRight, LayoutGrid } from "lucide-react";
+import { ArrowRight, BadgePercent, FileSignature, LayoutGrid, Truck, Wallet } from "lucide-react";
 import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
@@ -6,14 +6,33 @@ import { Suspense } from "react";
 import { CategoryIcon } from "@/components/catalog/category-icon";
 import { ProductGridSkeleton } from "@/components/catalog/listing";
 import { ProductGrid } from "@/components/catalog/product-card";
+import { ClientHome } from "@/components/home/client-home";
+import { PostsList } from "@/components/home/posts-list";
+import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getCategoryTree, getProducts, getShop } from "@/lib/catalog";
+import { getCategoryTree, getPosts, getProducts, getShop } from "@/lib/catalog";
 import { countLabel } from "@/lib/format";
 import type { SortKey } from "@/lib/types";
 import { categoryHref } from "@/lib/urls";
+import { cn } from "@/lib/utils";
+
+// A signed-in client sees their home (rendered in the browser); a guest, the landing for businesses. The
+// `authed:` variant picks one before the first paint for a visitor who was signed in last time.
+export default function HomePage() {
+  return (
+    <>
+      <div className="hidden authed:block">
+        <ClientHome />
+      </div>
+      <div className="authed:hidden">
+        <Landing />
+      </div>
+    </>
+  );
+}
 
 // Everything below reads backend data at request time (connection()), cached per data function.
-export default function HomePage() {
+function Landing() {
   return (
     <div className="space-y-12 sm:space-y-20">
       <section className="container-shop pt-8 sm:pt-16">
@@ -23,14 +42,25 @@ export default function HomePage() {
       </section>
 
       <section className="container-shop">
+        <Benefits />
+      </section>
+
+      <section className="container-shop">
         <SectionTitle title="Каталог" />
         <Suspense fallback={<CategoriesSkeleton />}>
           <RootCategories />
         </Suspense>
       </section>
 
+      <Suspense fallback={null}>
+        <LandingPosts />
+      </Suspense>
+
+      <section className="container-shop">
+        <Steps />
+      </section>
+
       <Showcase title="Новинки" sort="new" />
-      <Showcase title="Популярные товары" sort="popular" />
     </div>
   );
 }
@@ -41,13 +71,87 @@ async function Hero() {
   const total = roots.reduce((n, c) => n + c.product_count, 0);
   return (
     <div className="max-w-3xl">
+      <p className="mb-3 inline-flex rounded-full bg-primary/10 px-3 py-1 text-sm font-medium text-primary">Для компаний и ИП</p>
       <h1 className="text-[28px] leading-[1.12] font-semibold tracking-tight sm:text-5xl sm:leading-[1.08] lg:text-[56px]">
         {shop.tagline}
       </h1>
       <p className="mt-4 max-w-xl text-base text-muted-foreground sm:mt-5 sm:text-lg">
-        {countLabel(total)} в наличии — от комплектующих и бытовой техники до инструментов и товаров для дома.
+        Оптовые поставки для бизнеса: {countLabel(total)} в наличии, цены для вашей организации, работа по договору.
       </p>
+      <div className="mt-7 flex flex-wrap gap-3">
+        <Link href="/register" className={cn(buttonVariants({ size: "lg" }), "h-12 rounded-xl px-6 text-[15px]")}>
+          Стать клиентом
+        </Link>
+        <Link href="/login" className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-12 rounded-xl px-6 text-[15px]")}>
+          Войти в кабинет
+        </Link>
+      </div>
     </div>
+  );
+}
+
+const BENEFITS = [
+  { icon: BadgePercent, title: "Оптовые цены", text: "Свои цены для вашей организации — за наличные и по безналу." },
+  { icon: FileSignature, title: "Работа по договору", text: "Предоплата или отсрочка платежа, документы на организацию." },
+  { icon: Wallet, title: "Кабинет клиента", text: "Корзина, заказы и их статусы, несколько сотрудников в одной компании." },
+  { icon: Truck, title: "Доставка по Крыму", text: "Курьером по городу, транспортной компанией или самовывоз." },
+];
+
+function Benefits() {
+  return (
+    <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {BENEFITS.map(({ icon: Icon, title, text }) => (
+        <li key={title} className="rounded-3xl bg-muted/50 p-5">
+          <span className="grid size-10 place-items-center rounded-xl bg-background shadow-xs">
+            <Icon className="size-5 text-primary" />
+          </span>
+          <p className="mt-4 font-semibold">{title}</p>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{text}</p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const STEPS = [
+  { title: "Зарегистрируйте организацию", text: "ИНН и название — КПП и остальное по желанию." },
+  { title: "Менеджер проверит её", text: "В рабочее время, иногда с коротким звонком." },
+  { title: "Заказывайте по своим ценам", text: "Оптовые цены, договор, история заказов в кабинете." },
+];
+
+function Steps() {
+  return (
+    <div className="rounded-3xl border p-6 sm:p-10">
+      <h2 className="text-2xl font-semibold tracking-tight">Как начать работать</h2>
+      <ol className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-3">
+        {STEPS.map((s, i) => (
+          <li key={s.title} className="flex gap-4">
+            <span className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground text-sm font-semibold text-background tabular-nums">
+              {i + 1}
+            </span>
+            <span>
+              <span className="block font-semibold">{s.title}</span>
+              <span className="mt-1 block text-sm text-muted-foreground">{s.text}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
+      <Link href="/register" className={cn(buttonVariants({ size: "lg" }), "mt-8 h-11 rounded-xl px-5")}>
+        Зарегистрировать организацию
+      </Link>
+    </div>
+  );
+}
+
+async function LandingPosts() {
+  await connection();
+  const posts = await getPosts(3);
+  if (!posts.length) return null;
+  return (
+    <section className="container-shop">
+      <SectionTitle title="Новости и акции" />
+      <PostsList posts={posts} />
+    </section>
   );
 }
 

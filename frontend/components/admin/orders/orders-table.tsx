@@ -2,7 +2,8 @@ import Link from "next/link";
 
 import { Empty, StatusBadge } from "@/components/admin/ui";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { money, SOURCE, when } from "@/lib/admin/labels";
+import { money, PAYMENT_SHORT, SOURCE, when } from "@/lib/admin/labels";
+import { PRICE_TYPE } from "@/lib/admin/suppliers";
 import type { OrderListItem } from "@/lib/admin/types";
 
 export function OrdersTable({ orders }: { orders: OrderListItem[] }) {
@@ -33,12 +34,19 @@ export function OrdersTable({ orders }: { orders: OrderListItem[] }) {
             <TableCell>
               <div className="font-medium">{o.customer_name}</div>
               <div className="text-xs text-muted-foreground">{o.phone}</div>
+              {o.buyer_name && <div className="text-xs text-muted-foreground">{o.buyer_name}</div>}
             </TableCell>
             <TableCell>
               <StatusBadge status={o.status} />
             </TableCell>
             <TableCell className="text-right tabular-nums">{o.items_count}</TableCell>
-            <TableCell className="text-right font-medium whitespace-nowrap tabular-nums">{money(o.total)}</TableCell>
+            <TableCell className="text-right whitespace-nowrap">
+              <div className="font-medium tabular-nums">{money(o.total)}</div>
+              <div className="text-xs text-muted-foreground">
+                {PAYMENT_SHORT[o.payment_method]}
+                {PRICE_TYPE[o.price_type].audience === "wholesale" && " · опт"}
+              </div>
+            </TableCell>
             <TableCell className="hidden text-muted-foreground md:table-cell">{SOURCE[o.source]}</TableCell>
           </TableRow>
         ))}

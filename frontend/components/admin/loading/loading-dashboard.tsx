@@ -9,7 +9,7 @@ import { Automations, Checks, FailedPanel, QualityPanel, Stages } from "@/compon
 import { LoadingSettings } from "@/components/admin/loading/settings-panel";
 import { TrialPanel } from "@/components/admin/loading/trial-panel";
 import { RequeuePanel } from "@/components/admin/settings-forms";
-import { PageHeader, Panel } from "@/components/admin/ui";
+import { Panel } from "@/components/admin/ui";
 import { Button } from "@/components/ui/button";
 import { apiErrorText } from "@/lib/admin/errors";
 import type { Loading } from "@/lib/admin/types";
@@ -66,16 +66,16 @@ export function LoadingDashboard({ initial }: { initial: Loading }) {
 
   return (
     <>
-      <PageHeader
-        title="Загрузка каталога"
-        description="Товары, цены и фото от поставщика: что готово, что идёт сейчас и когда закончится. Страница обновляется сама каждые 5 секунд."
-        actions={
-          <Button onClick={togglePause} disabled={busy} variant={settings.paused ? "default" : "outline"}>
-            {busy ? <LoaderCircle className="animate-spin" /> : settings.paused ? <Play /> : <CirclePause />}
-            {settings.paused ? (started ? "Продолжить загрузку фото" : "Начать загрузку фото") : "Пауза"}
-          </Button>
-        }
-      />
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <p className="max-w-3xl text-sm text-muted-foreground">
+          Товары, цены и фото от поставщика: что готово, что идёт сейчас и когда закончится. Страница обновляется сама каждые 5
+          секунд.
+        </p>
+        <Button onClick={togglePause} disabled={busy} variant={settings.paused ? "default" : "outline"}>
+          {busy ? <LoaderCircle className="animate-spin" /> : settings.paused ? <Play /> : <CirclePause />}
+          {settings.paused ? (started ? "Продолжить загрузку фото" : "Начать загрузку фото") : "Пауза фото"}
+        </Button>
+      </div>
       {offline && <p className="mb-4 text-sm text-destructive">Нет связи с API — показаны последние полученные данные.</p>}
       {settings.paused && !started && (
         <div className="mb-4 rounded-xl bg-primary/5 px-4 py-3 text-sm ring-1 ring-primary/15">

@@ -1,4 +1,4 @@
-"""Background worker: periodic supplier syncs + continuous image processing.
+"""Background worker: periodic supplier syncs and housekeeping + continuous image processing.
 
     python -m app.worker
 """

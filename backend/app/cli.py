@@ -1,10 +1,11 @@
 """Maintenance commands.
 
     python -m app.cli sync categories|products|stock|images     run one sync job now
+    python -m app.cli sync carts                                 delete guest carts left alone for 90 days
     python -m app.cli import-categories FILE                     import a downloaded catalog_tree_N.json
     python -m app.cli import-products FILE                       import a downloaded products_N.json
     python -m app.cli process-images [N]                         process N pending images in the foreground
-    python -m app.cli reprice                                    recompute retail prices
+    python -m app.cli reprice                                    recompute the 4 prices of every product
     python -m app.cli requeue-images [VARIANT]                   reprocess ready images (e.g. "small") after calibration
     python -m app.cli dedupe-images                              find copies among the processed photos of every product
     python -m app.cli watermark-test IN.jpg OUT.jpg              remove the watermark from a local file
@@ -127,7 +128,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     p = argparse.ArgumentParser(prog="python -m app.cli")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("sync").add_argument("job", choices=["categories", "products", "stock", "images"])
+    sub.add_parser("sync").add_argument("job", choices=["categories", "products", "stock", "images", "carts"])
     sub.add_parser("import-categories").add_argument("file", type=Path)
     ip = sub.add_parser("import-products")
     ip.add_argument("file", type=Path)

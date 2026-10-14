@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.admin.common import Session
 from app.api.admin.orders import list_item
-from app.models import JobState, Order, OrderStatus, Product, ProductImage
+from app.models import JobState, Order, OrderStatus, Organization, OrganizationStatus, Product, ProductImage
 from app.models.base import utcnow
 from app.worker import TRIAL, WORKER
 
@@ -50,7 +50,7 @@ async def dashboard(session: Session) -> dict[str, Any]:
                 func.count(),
                 func.count().filter(Product.in_stock),
                 func.count().filter(Product.is_hidden),
-                func.count().filter(Product.price_override.is_not(None)),
+                func.count().filter(Product.price_overrides.is_not(None)),  # a fixed price of any type
                 func.count().filter(Product.in_stock, Product.price.is_(None)),
             ).where(Product.is_active)
         )
@@ -76,6 +76,7 @@ async def dashboard(session: Session) -> dict[str, Any]:
             ).where(Order.status == OrderStatus.completed, Order.created_at >= since)
         )
     ).one()
+    orgs_pending = await session.scalar(select(func.count()).select_from(Organization).where(Organization.status == OrganizationStatus.pending)) or 0
     recent = await session.scalars(select(Order).options(selectinload(Order.items)).order_by(Order.id.desc()).limit(6))
     jobs = (await session.scalars(select(JobState).where(JobState.name.not_in(NOT_JOBS)).order_by(JobState.name))).all()
     return {
@@ -94,6 +95,7 @@ async def dashboard(session: Session) -> dict[str, Any]:
             "revenue_30d": Decimal(revenue),
             "margin_30d": Decimal(revenue) - Decimal(cost),
         },
+        "organizations": {"pending": orgs_pending},  # waiting for a manager's check
         "recent_orders": [list_item(o) for o in recent],
         "jobs": _jobs(jobs),
     }

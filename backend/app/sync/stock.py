@@ -1,5 +1,6 @@
 """Prices and stock: get_active_products (only in-stock items, limit 10/hour)."""
 
+import asyncio
 import logging
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation
@@ -9,11 +10,12 @@ from sqlalchemy import func, select, update
 from app.db import SessionLocal
 from app.models import Category, Product
 from app.models.base import utcnow
-from app.site_settings import PricingSettings, get_settings_obj, retail_price
+from app.pricing import DEFAULT_SUPPLIER, compute_prices, get_supplier_pricing
 from app.supplier.client import SupplierClient
 
 log = logging.getLogger(__name__)
 BATCH = 5000
+_reprice_lock = asyncio.Lock()
 
 
 def _qty(item: dict, real: str, stars: str) -> int:
@@ -27,12 +29,12 @@ def _qty(item: dict, real: str, stars: str) -> int:
 async def apply_stock(items: list[dict]) -> dict:
     now = utcnow()
     async with SessionLocal() as session:
-        pricing = await get_settings_obj(session, PricingSettings)
+        pricing = await get_supplier_pricing(session, DEFAULT_SUPPLIER)
         known = {
-            sku: (rrp, path, override)
-            for sku, rrp, path, override in (
+            sku: (rrp, path, overrides)
+            for sku, rrp, path, overrides in (
                 await session.execute(
-                    select(Product.sku, Product.rrp, Category.path, Product.price_override).outerjoin(
+                    select(Product.sku, Product.rrp, Category.path, Product.price_overrides).outerjoin(
                         Category, Category.id == Product.category_id
                     )
                 )
@@ -50,11 +52,11 @@ async def apply_stock(items: list[dict]) -> dict:
             continue
         if supplier_price <= 0:
             continue
-        rrp, path, override = known[sku]
+        rrp, path, overrides = known[sku]
         rows.append({
             "sku": sku,
             "supplier_price": supplier_price,
-            "price": override or retail_price(supplier_price, rrp, path, pricing),
+            **compute_prices(supplier_price, rrp, path, pricing, overrides),
             "qty_central": _qty(it, "real_qty", "qty"),
             "qty_nearest": _qty(it, "nearest_logistic_center_real_qty", "nearest_logistic_center_qty"),
             "delivery_days": it.get("delivery_days"),
@@ -78,19 +80,20 @@ async def apply_stock(items: list[dict]) -> dict:
 
 
 async def reprice_all() -> int:
-    """Recompute retail prices after the pricing settings changed (fixed prices set by admin stay)."""
-    async with SessionLocal() as session:
-        pricing = await get_settings_obj(session, PricingSettings)
+    """Recompute the 4 prices after the markup rules changed (fixed prices set by admin stay).
+    One run at a time: when the rules of several price types are saved in a row, the last run sees them all."""
+    async with _reprice_lock, SessionLocal() as session:
+        pricing = await get_supplier_pricing(session, DEFAULT_SUPPLIER)
         data = (
             await session.execute(
-                select(Product.sku, Product.supplier_price, Product.rrp, Category.path, Product.price_override)
+                select(Product.sku, Product.supplier_price, Product.rrp, Category.path, Product.price_overrides)
                 .outerjoin(Category, Category.id == Product.category_id)
                 .where(Product.supplier_price.is_not(None))
             )
         ).all()
         rows = [
-            {"sku": sku, "price": override or retail_price(sp, rrp, path, pricing)}
-            for sku, sp, rrp, path, override in data
+            {"sku": sku, **compute_prices(sp, rrp, path, pricing, overrides)}
+            for sku, sp, rrp, path, overrides in data
         ]
         for i in range(0, len(rows), BATCH):
             await session.execute(update(Product), rows[i : i + BATCH])

@@ -1,12 +1,13 @@
+import re
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy import JSON, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, utcnow
-from app.models.catalog import Money
+from app.models.catalog import Money, PaymentMethod, PriceType
 
 
 class OrderStatus(StrEnum):
@@ -49,6 +50,14 @@ class Order(TimestampMixin, Base):
     phone: Mapped[str] = mapped_column(String(32), index=True)
     email: Mapped[str | None] = mapped_column(String(254))
     delivery: Mapped[DeliveryMethod] = mapped_column(String(16), default=DeliveryMethod.pickup)
+    payment_method: Mapped[PaymentMethod] = mapped_column(String(16), default=PaymentMethod.cash)
+    # the prices the lines were taken at (lines added later take this type's price too)
+    price_type: Mapped[PriceType] = mapped_column(String(24), default=PriceType.retail_cash)
+    # bought for an organization: its requisites and the contract as they were at checkout (`buyer`), the
+    # records themselves may change or be deleted later
+    organization_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id", ondelete="SET NULL"), index=True)
+    contract_id: Mapped[int | None] = mapped_column(ForeignKey("contracts.id", ondelete="SET NULL"))
+    buyer: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
     city: Mapped[str | None] = mapped_column(String(128))
     address: Mapped[str | None] = mapped_column(String(512))
     comment: Mapped[str | None] = mapped_column(Text)  # from the customer
@@ -81,7 +90,7 @@ class OrderItem(Base):
     # no foreign key: the order must survive the product disappearing from the supplier catalog
     sku: Mapped[int] = mapped_column(index=True)
     name: Mapped[str] = mapped_column(String(1024))
-    price: Mapped[Decimal] = mapped_column(Money)  # retail price per unit
+    price: Mapped[Decimal] = mapped_column(Money)  # price per unit, of the order's price type
     supplier_price: Mapped[Decimal | None] = mapped_column(Money)  # cost per unit, for the margin
     qty: Mapped[int] = mapped_column(default=1)
 
@@ -102,3 +111,9 @@ class OrderEvent(Base):
     author: Mapped[str | None] = mapped_column(String(255))  # name or e-mail at the time
 
     order: Mapped[Order] = relationship(back_populates="events")
+
+
+def normalize_phone(phone: str) -> str:
+    """Keep the leading + and digits: "+7 (978) 000-00-00" -> "+79780000000"."""
+    p = phone.strip()
+    return ("+" if p.startswith("+") else "") + re.sub(r"\D", "", p)

@@ -13,9 +13,9 @@ from app.api.catalog import clear_caches
 from app.api.schemas import CategoryRef
 from app.config import get_settings
 from app.images.processing import image_url
-from app.models import Category, Product, ProductImage
+from app.models import Category, PriceType, Product, ProductImage
 from app.models.catalog import ImageStatus
-from app.site_settings import PricingSettings, get_settings_obj, retail_price
+from app.pricing import DEFAULT_SUPPLIER, compute_prices, get_supplier_pricing
 from app.sync.stock import recount_categories
 
 router = APIRouter()
@@ -30,9 +30,10 @@ class AdminProduct(BaseModel):
     category: CategoryRef | None
     supplier_price: Money | None
     rrp: Money | None
-    price: Money | None
-    price_override: Money | None
-    markup_percent: float | None  # price / supplier price - 1, %
+    price: Money | None  # retail cash, the shop price
+    prices: dict[PriceType, Money | None]
+    price_overrides: dict[PriceType, Money]  # the types whose price is fixed by admin
+    markup_percent: float | None  # retail cash price / supplier price - 1, %
     in_stock: bool
     qty: int
     is_hidden: bool
@@ -40,10 +41,14 @@ class AdminProduct(BaseModel):
     image: str | None  # small thumbnail url
 
 
-class ProductPatch(BaseModel):
-    """Only the fields that are sent change; `price_override: null` returns the product to the rules."""
+FixedPrice = Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=2)]  # fits Money
 
-    price_override: Decimal | None = Field(None, gt=0)
+
+class ProductPatch(BaseModel):
+    """Only the fields that are sent change. `price_overrides` is merged into the fixed prices: a price fixes
+    that type, `null` returns the type to the markup rules."""
+
+    price_overrides: dict[PriceType, FixedPrice | None] | None = None
     is_hidden: bool | None = None
 
 
@@ -73,7 +78,8 @@ def _out(p: Product) -> AdminProduct:
         supplier_price=p.supplier_price,
         rrp=p.rrp,
         price=p.price,
-        price_override=p.price_override,
+        prices={t: p.price_for(t) for t in PriceType},
+        price_overrides=p.fixed_prices(),
         markup_percent=round(markup, 1) if markup is not None else None,
         in_stock=p.in_stock,
         qty=p.qty_central + p.qty_nearest,
@@ -97,7 +103,7 @@ async def list_products(
     q: str | None = None,
     category_id: int | None = None,
     in_stock: bool | None = None,
-    override: bool | None = Query(None, description="Only products with (true) / without (false) a fixed price"),
+    override: bool | None = Query(None, description="Only products with (true) / without (false) a fixed price of any type"),
     hidden: bool | None = None,
     sort: Literal["name", "price", "markup", "new"] = "new",
     page: Annotated[int, Query(ge=1)] = 1,
@@ -114,7 +120,7 @@ async def list_products(
     if in_stock is not None:
         stmt = stmt.where(Product.in_stock == in_stock)
     if override is not None:
-        stmt = stmt.where(Product.price_override.is_not(None) if override else Product.price_override.is_(None))
+        stmt = stmt.where(Product.price_overrides.is_not(None) if override else Product.price_overrides.is_(None))
     if hidden is not None:
         stmt = stmt.where(Product.is_hidden == hidden)
     total = await session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
@@ -137,13 +143,18 @@ async def update_product(sku: int, body: ProductPatch, session: Session, backgro
     if p is None:
         raise HTTPException(404, "Product not found")
     sent = body.model_fields_set
-    if "price_override" in sent:
-        p.price_override = body.price_override
-        if body.price_override is not None:
-            p.price = body.price_override
-        elif p.supplier_price is not None:
-            pricing = await get_settings_obj(session, PricingSettings)
-            p.price = retail_price(p.supplier_price, p.rrp, p.category.path if p.category else None, pricing)
+    if "price_overrides" in sent and body.price_overrides is not None:
+        fixed = dict(p.price_overrides or {})  # a new dict: the JSON column does not notice changes in place
+        for t, price in body.price_overrides.items():
+            if price is None:
+                fixed.pop(t.value, None)
+            else:
+                fixed[t.value] = str(price.quantize(Decimal("0.01")))
+        p.price_overrides = fixed
+        pricing = await get_supplier_pricing(session, DEFAULT_SUPPLIER)
+        path = p.category.path if p.category else None
+        for column, price in compute_prices(p.supplier_price, p.rrp, path, pricing, p.price_overrides).items():
+            setattr(p, column, price)
     if "is_hidden" in sent and body.is_hidden is not None and body.is_hidden != p.is_hidden:
         p.is_hidden = body.is_hidden
         background.add_task(recount_categories)

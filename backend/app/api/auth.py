@@ -19,7 +19,8 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.api.deps import ACCESS_COOKIE, REFRESH_COOKIE, REFRESH_COOKIE_PATH, CurrentUser, Session
+from app.api.account import OrganizationIn, check_not_registered, create_organization
+from app.api.deps import ACCESS_COOKIE, REFRESH_COOKIE, REFRESH_COOKIE_PATH, CurrentUser, Session, client_ip
 from app.auth import (
     AuthError,
     TokenPair,
@@ -59,10 +60,13 @@ class TokenOut(BaseModel):
 
 
 class RegisterIn(BaseModel):
+    """A client registers with their organization (the site sells to businesses only); they become its head."""
+
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     name: str | None = Field(None, max_length=255)
     phone: str | None = Field(None, max_length=32)
+    organization: OrganizationIn
 
 
 class LoginIn(BaseModel):
@@ -124,24 +128,22 @@ def _clear_cookies(response: Response) -> None:
     response.delete_cookie(REFRESH_COOKIE, path=REFRESH_COOKIE_PATH)
 
 
-def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "?"
-
-
 # --- endpoints ------------------------------------------------------------------------------
 
 
 @router.post("/register", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterIn, request: Request, response: Response, session: Session):
-    _check_throttle(f"ip:{_client_ip(request)}")
+    _check_throttle(f"ip:{client_ip(request)}")
+    await check_not_registered(session, body.organization.inn, body.organization.kpp)
     user = User(email=normalize_email(body.email), password_hash=hash_password(body.password), name=body.name, phone=body.phone)
     session.add(user)
     try:
         await session.flush()
     except IntegrityError:
         await session.rollback()
-        _record_failure(f"ip:{_client_ip(request)}")
+        _record_failure(f"ip:{client_ip(request)}")
         raise HTTPException(status.HTTP_409_CONFLICT, "Email is already registered") from None
+    await create_organization(session, user, body.organization)
     pair = await issue_tokens(session, user, user_agent=request.headers.get("user-agent"))
     user.last_login_at = utcnow()
     await session.commit()
@@ -151,7 +153,7 @@ async def register(body: RegisterIn, request: Request, response: Response, sessi
 @router.post("/login", response_model=TokenOut)
 async def login(body: LoginIn, request: Request, response: Response, session: Session):
     email = normalize_email(body.email)
-    keys = (f"ip:{_client_ip(request)}", f"email:{email}")
+    keys = (f"ip:{client_ip(request)}", f"email:{email}")
     _check_throttle(*keys)
     user = await session.scalar(select(User).where(User.email == email))
     if not verify_password(user, body.password) or not user.is_active:
