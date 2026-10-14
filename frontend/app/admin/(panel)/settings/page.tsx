@@ -24,7 +24,7 @@ export default function SettingsPage() {
         <Panel title="Фото товаров">
           <p className="text-sm text-muted-foreground">
             Сколько фото грузить на товар, скорость загрузки, пауза, переобработка и фото с ошибками — на странице{" "}
-            <Link href="/admin/loading" className="text-primary hover:underline">
+            <Link href="/admin/suppliers/itp/loading" className="text-primary hover:underline">
               «Загрузка каталога»
             </Link>
             .

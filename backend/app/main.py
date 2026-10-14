@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import admin, auth, catalog, media
+from app.api import account, admin, auth, cart, catalog, media, orders, posts
 from app.auth import ensure_admin
 from app.config import get_settings
 from app.db import SessionLocal, engine
@@ -35,6 +35,10 @@ def create_app() -> FastAPI:
     )
     app.include_router(auth.router)
     app.include_router(catalog.router)
+    app.include_router(cart.router)
+    app.include_router(orders.router)
+    app.include_router(account.router)
+    app.include_router(posts.router)
     app.include_router(admin.router)
     app.include_router(media.router)
 

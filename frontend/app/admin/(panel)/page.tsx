@@ -67,6 +67,18 @@ async function DashboardContent() {
 
   return (
     <>
+      {d.organizations.pending > 0 && (
+        <Link
+          href="/admin/organizations?status=pending"
+          className="mb-3 flex items-center justify-between gap-3 rounded-2xl bg-amber-500/10 px-5 py-3.5 text-sm text-amber-900 ring-1 ring-amber-500/20 transition hover:bg-amber-500/15"
+        >
+          <span>
+            Новых клиентов на проверке: <span className="font-semibold tabular-nums">{d.organizations.pending}</span>. Пока менеджер не подтвердит
+            организацию, её сотрудники не видят цен и не могут заказывать.
+          </span>
+          <span className="shrink-0 font-medium">Проверить →</span>
+        </Link>
+      )}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Открытые заказы" value={formatNumber(d.orders.open)} hint="все, кроме выполненных и отменённых" href="/admin/orders" />
         <Stat label="Выручка за 30 дней" value={money(d.orders.revenue_30d)} hint={`${d.orders.completed_30d} выполненных заказов`} />
@@ -107,7 +119,7 @@ async function DashboardContent() {
         <Panel
           title="Фото товаров"
           action={
-            <Link href="/admin/loading" className="text-sm text-primary hover:underline">
+            <Link href="/admin/suppliers/itp/loading" className="text-sm text-primary hover:underline">
               Загрузка каталога
             </Link>
           }

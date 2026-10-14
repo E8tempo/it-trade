@@ -6,100 +6,28 @@ import { useListing } from "@/components/catalog/listing-context";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { formatNumber } from "@/lib/format";
 import type { VendorFacet } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+// No price filter: the catalog shows no prices to guests, and a client's prices are their organization's.
 export type FacetsProps = {
   vendors: VendorFacet[];
-  priceMin: number | null;
-  priceMax: number | null;
 };
 
-export function Filters({ vendors, priceMin, priceMax, className }: FacetsProps & { className?: string }) {
+export function Filters({ vendors, className }: FacetsProps & { className?: string }) {
   const { query, navigate } = useListing();
-  const active = query.vendors.length > 0 || query.min !== undefined || query.max !== undefined;
+  const active = query.vendors.length > 0;
   return (
     <div className={cn("space-y-8", className)}>
-      <PriceFilter
-        key={`${query.min ?? ""}-${query.max ?? ""}`}
-        min={query.min}
-        max={query.max}
-        rangeMin={priceMin}
-        rangeMax={priceMax}
-        onApply={(min, max) => navigate({ min, max })}
-      />
       {(vendors.length > 0 || query.vendors.length > 0) && (
         <VendorFilter vendors={vendors} selected={query.vendors} onChange={(v) => navigate({ vendors: v })} />
       )}
       {active && (
-        <Button variant="outline" className="h-9 w-full" onClick={() => navigate({ vendors: [], min: undefined, max: undefined })}>
+        <Button variant="outline" className="h-9 w-full" onClick={() => navigate({ vendors: [] })}>
           Сбросить фильтры
         </Button>
       )}
     </div>
-  );
-}
-
-function toNumber(s: string): number | undefined {
-  const n = Number.parseInt(s, 10);
-  return Number.isFinite(n) && n > 0 ? n : undefined;
-}
-
-function PriceFilter({
-  min,
-  max,
-  rangeMin,
-  rangeMax,
-  onApply,
-}: {
-  min?: number;
-  max?: number;
-  rangeMin: number | null;
-  rangeMax: number | null;
-  onApply: (min?: number, max?: number) => void;
-}) {
-  const [from, setFrom] = useState(min ? String(min) : "");
-  const [to, setTo] = useState(max ? String(max) : "");
-
-  const apply = () => {
-    let f = toNumber(from);
-    let t = toNumber(to);
-    if (f && t && f > t) [f, t] = [t, f];
-    if (f !== min || t !== max) onApply(f, t);
-  };
-
-  return (
-    <fieldset>
-      <legend className="mb-3 text-sm font-semibold">Цена, ₽</legend>
-      <form
-        className="grid grid-cols-2 gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          apply();
-        }}
-      >
-        <Input
-          inputMode="numeric"
-          aria-label="Цена от"
-          placeholder={rangeMin != null ? `от ${formatNumber(Math.floor(rangeMin))}` : "от"}
-          value={from}
-          onChange={(e) => setFrom(e.target.value.replace(/\D/g, ""))}
-          onBlur={apply}
-          className="h-9 tabular-nums"
-        />
-        <Input
-          inputMode="numeric"
-          aria-label="Цена до"
-          placeholder={rangeMax != null ? `до ${formatNumber(Math.ceil(rangeMax))}` : "до"}
-          value={to}
-          onChange={(e) => setTo(e.target.value.replace(/\D/g, ""))}
-          onBlur={apply}
-          className="h-9 tabular-nums"
-        />
-        <button type="submit" hidden />
-      </form>
-    </fieldset>
   );
 }
 

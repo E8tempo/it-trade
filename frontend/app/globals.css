@@ -3,6 +3,8 @@
 @import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
+/* a signed-in visitor (<html data-auth="user">, set before the first paint, see app/layout.tsx) */
+@custom-variant authed (&:where([data-auth="user"] *));
 
 @theme inline {
   --color-background: var(--background);
@@ -49,6 +51,7 @@
 }
 
 :root {
+  --header-h: 69px; /* the sticky header's height, kept exact by components/site/header-height.tsx */
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);

@@ -11,7 +11,7 @@ import { PER_PAGE } from "@/lib/urls";
 export async function Listing({ query, basePath }: { query: ListingQuery; basePath: string }) {
   const page = await getProducts(query, { perPage: PER_PAGE });
   const totalPages = Math.min(Math.ceil(page.total / page.per_page), 1000);
-  const facets = { vendors: page.vendors, priceMin: page.price_min, priceMax: page.price_max };
+  const facets = { vendors: page.vendors };
 
   return (
     <ListingProvider basePath={basePath} query={query}>

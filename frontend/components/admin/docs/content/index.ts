@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 
 import CatalogLoading from "./catalog-loading";
 import ImagePipeline from "./image-pipeline";
+import Organizations from "./organizations";
 import Pricing from "./pricing";
 import Sync from "./sync";
 import WatermarkCalibration from "./watermark-calibration";
@@ -18,6 +19,7 @@ export const DOC_CONTENT: Record<string, ComponentType> = {
   "watermark-history": WatermarkHistory,
   "image-pipeline": ImagePipeline,
   pricing: Pricing,
+  organizations: Organizations,
   "catalog-loading": CatalogLoading,
   sync: Sync,
 };

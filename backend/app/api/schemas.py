@@ -1,8 +1,10 @@
+from datetime import date
+
 from pydantic import BaseModel
 
 from app.config import get_settings
 from app.images.processing import SIZES, image_url
-from app.models import Category, Product, ProductImage
+from app.models import Category, ContractTerms, Product, ProductImage
 
 
 class ImageOut(BaseModel):
@@ -49,7 +51,7 @@ class ProductCard(BaseModel):
     slug: str
     vendor: str | None
     part: str | None
-    price: float | None
+    # no prices: the site sells to businesses only, a client's browser takes them from /api/cart/prices
     in_stock: bool
     qty: int
     image: ImageOut | None
@@ -62,7 +64,6 @@ class ProductCard(BaseModel):
             slug=p.slug,
             vendor=p.vendor,
             part=p.part,
-            price=float(p.price) if p.price is not None else None,
             in_stock=p.in_stock,
             qty=p.qty_central + p.qty_nearest,
             image=ImageOut.of(image) if image else None,
@@ -80,8 +81,6 @@ class ProductPage(BaseModel):
     page: int
     per_page: int
     vendors: list[VendorFacet]
-    price_min: float | None
-    price_max: float | None
 
 
 class ProductDetail(ProductCard):
@@ -95,3 +94,22 @@ class ProductDetail(ProductCard):
     category: CategoryRef | None
     breadcrumbs: list[CategoryRef]
     images: list[ImageOut]
+
+
+class ContractRef(BaseModel):
+    id: int
+    number: str
+    signed_on: date
+    terms: ContractTerms
+    deferral_days: int | None
+
+
+class OrderBuyer(BaseModel):
+    """The organization an order was placed for and its contract, as they were at checkout (Order.buyer)."""
+
+    name: str
+    inn: str
+    kpp: str | None
+    ogrn: str | None
+    address: str | None
+    contract: ContractRef | None

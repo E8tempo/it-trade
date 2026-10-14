@@ -1,7 +1,7 @@
 import Link from "next/link";
 
-import { STATUS } from "@/lib/admin/labels";
-import type { OrderStatus } from "@/lib/admin/types";
+import { ORG_STATUS, STATUS } from "@/lib/admin/labels";
+import type { OrderStatus, OrganizationStatus } from "@/lib/admin/types";
 import { cn } from "@/lib/utils";
 
 export function PageHeader({
@@ -58,6 +58,11 @@ export function Stat({ label, value, hint, href }: { label: string; value: React
 
 export function StatusBadge({ status, className }: { status: OrderStatus; className?: string }) {
   const s = STATUS[status];
+  return <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap", s.tone, className)}>{s.label}</span>;
+}
+
+export function OrgStatusBadge({ status, className }: { status: OrganizationStatus; className?: string }) {
+  const s = ORG_STATUS[status];
   return <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap", s.tone, className)}>{s.label}</span>;
 }
 

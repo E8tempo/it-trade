@@ -39,7 +39,7 @@ export default function LabPage() {
             <Calculator className="size-6 text-primary" />
             <div>
               <h2 className="font-semibold">Калькулятор цены</h2>
-              <p className="text-sm text-muted-foreground">По сохранённым правилам наценок, шаг за шагом.</p>
+              <p className="text-sm text-muted-foreground">Любая из четырёх цен по сохранённым правилам поставщика, шаг за шагом.</p>
             </div>
           </div>
           <Suspense fallback={<Skeleton className="h-40" />}>

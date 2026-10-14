@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 
+import { CardCartButton } from "@/components/catalog/card-cart-button";
+import { CardPrice } from "@/components/catalog/card-price";
 import { ProductImage } from "@/components/catalog/product-image";
-import { formatPrice } from "@/lib/format";
 import type { ProductCard as ProductCardT } from "@/lib/types";
 import { productHref } from "@/lib/urls";
 
@@ -16,30 +17,39 @@ export function ProductCard({
   priority?: boolean;
 }) {
   return (
-    <Link
-      href={productHref(product)}
-      className="group flex h-full flex-col gap-3 rounded-2xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-    >
-      <div className="relative aspect-square overflow-hidden rounded-2xl bg-muted/70 p-[9%] transition-colors duration-300 group-hover:bg-muted">
-        <ProductImage
-          image={product.image}
-          alt={product.name}
-          sizes={sizes}
-          priority={priority}
-          className={cn("transition-transform duration-500 ease-out group-hover:scale-[1.04]", !product.in_stock && "opacity-50 grayscale")}
-        />
-        {!product.in_stock && (
-          <span className="absolute top-3 left-3 rounded-full bg-background/90 px-2.5 py-1 text-xs font-medium text-muted-foreground">
-            Нет в наличии
-          </span>
-        )}
-      </div>
-      <div className="flex flex-1 flex-col gap-1 px-0.5">
-        <span className="text-[17px] font-semibold tracking-tight tabular-nums">{formatPrice(product.price)}</span>
-        <h3 className="line-clamp-2 text-sm leading-snug text-foreground/85 group-hover:text-foreground">{product.name}</h3>
-        {product.vendor && <span className="mt-auto pt-0.5 text-xs text-muted-foreground">{product.vendor}</span>}
-      </div>
-    </Link>
+    <div className="group relative h-full">
+      <Link
+        href={productHref(product)}
+        className="flex h-full flex-col gap-3 rounded-2xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+      >
+        <div className="relative aspect-square overflow-hidden rounded-2xl bg-muted/70 p-[9%] transition-colors duration-300 group-hover:bg-muted">
+          <ProductImage
+            image={product.image}
+            alt={product.name}
+            sizes={sizes}
+            priority={priority}
+            className={cn("transition-transform duration-500 ease-out group-hover:scale-[1.04]", !product.in_stock && "opacity-50 grayscale")}
+          />
+          {!product.in_stock && (
+            <span className="absolute top-3 left-3 rounded-full bg-background/90 px-2.5 py-1 text-xs font-medium text-muted-foreground">
+              Нет в наличии
+            </span>
+          )}
+        </div>
+        <div className="flex flex-1 flex-col gap-1 px-0.5">
+          <CardPrice sku={product.sku} className="text-[17px] font-semibold tracking-tight tabular-nums" />
+          <h3 className="line-clamp-2 text-sm leading-snug text-foreground/85 group-hover:text-foreground">{product.name}</h3>
+          {product.vendor && <span className="mt-auto pt-0.5 text-xs text-muted-foreground">{product.vendor}</span>}
+        </div>
+      </Link>
+      {product.in_stock && (
+        // a sibling over the photo's corner, not inside the link: a button within a link is invalid
+        // HTML, and clicking it would also follow the link
+        <div className="pointer-events-none absolute inset-x-0 top-0 aspect-square">
+          <CardCartButton sku={product.sku} name={product.name} className="pointer-events-auto absolute right-2 bottom-2 sm:right-2.5 sm:bottom-2.5" />
+        </div>
+      )}
+    </div>
   );
 }
 

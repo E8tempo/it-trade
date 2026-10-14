@@ -44,8 +44,6 @@ export function parseListing(sp: RawSearchParams, base: Partial<ListingQuery> = 
   return {
     ...base,
     vendors: (Array.isArray(vendor) ? vendor : vendor ? [vendor] : []).filter(Boolean).sort(),
-    min: positive(sp.min),
-    max: positive(sp.max),
     sort: sort && sort in SORTS ? (sort as SortKey) : "popular",
     page: Math.min(Math.max(Math.trunc(positive(sp.page) ?? 1), 1), 1000),
   };
@@ -57,8 +55,6 @@ export function listingSearch(query: ListingQuery, patch: Partial<ListingQuery> 
   const sp = new URLSearchParams();
   if (q.q) sp.set("q", q.q);
   for (const v of q.vendors) sp.append("vendor", v);
-  if (q.min) sp.set("min", String(q.min));
-  if (q.max) sp.set("max", String(q.max));
   if (q.sort !== "popular") sp.set("sort", q.sort);
   if (q.page > 1) sp.set("page", String(q.page));
   const s = sp.toString();

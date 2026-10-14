@@ -8,12 +8,19 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { DELIVERY, money } from "@/lib/admin/labels";
-import type { AdminProduct, DeliveryMethod, Page } from "@/lib/admin/types";
+import type { AdminProduct, DeliveryMethod, Page, PriceType } from "@/lib/admin/types";
 import { api } from "@/lib/api/client";
 import { useDebounced } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 
-export type Line = { sku: number; name: string; price: number; qty: number; supplier_price: number | null };
+export type Line = {
+  sku: number;
+  name: string;
+  price: number;
+  qty: number;
+  supplier_price: number | null;
+  prices?: AdminProduct["prices"]; // catalog prices of a line picked in this form, to follow a change of the price type
+};
 
 export type Customer = {
   customer_name: string;
@@ -79,13 +86,30 @@ export function Field({ label, className, children }: { label: string; className
   );
 }
 
-/** Order lines: quantity and unit price per line, products added from the catalog search. */
-export function ItemsEditor({ lines, onChange, disabled }: { lines: Line[]; onChange: (l: Line[]) => void; disabled?: boolean }) {
+/**
+ * Order lines: quantity and unit price per line, products added from the catalog search at their price of
+ * `priceType` (the order's audience and payment method).
+ */
+export function ItemsEditor({
+  lines,
+  onChange,
+  priceType,
+  disabled,
+}: {
+  lines: Line[];
+  onChange: (l: Line[]) => void;
+  priceType: PriceType;
+  disabled?: boolean;
+}) {
   const update = (i: number, patch: Partial<Line>) => onChange(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   const add = (p: AdminProduct) => {
     const existing = lines.findIndex((l) => l.sku === p.sku);
     if (existing >= 0) update(existing, { qty: lines[existing].qty + 1 });
-    else onChange([...lines, { sku: p.sku, name: p.name, price: p.price ?? 0, qty: 1, supplier_price: p.supplier_price }]);
+    else
+      onChange([
+        ...lines,
+        { sku: p.sku, name: p.name, price: p.prices[priceType] ?? 0, qty: 1, supplier_price: p.supplier_price, prices: p.prices },
+      ]);
   };
 
   return (
@@ -139,12 +163,12 @@ export function ItemsEditor({ lines, onChange, disabled }: { lines: Line[]; onCh
           ))}
         </ul>
       )}
-      {!disabled && <ProductPicker onPick={add} />}
+      {!disabled && <ProductPicker onPick={add} priceType={priceType} />}
     </div>
   );
 }
 
-function ProductPicker({ onPick }: { onPick: (p: AdminProduct) => void }) {
+function ProductPicker({ onPick, priceType }: { onPick: (p: AdminProduct) => void; priceType: PriceType }) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<AdminProduct[]>([]);
   const debounced = useDebounced(q.trim(), 250);
@@ -185,7 +209,7 @@ function ProductPicker({ onPick }: { onPick: (p: AdminProduct) => void }) {
                     Арт. {p.sku} · {p.in_stock ? `в наличии ${p.qty}` : "нет в наличии"}
                   </span>
                 </span>
-                <span className="font-medium tabular-nums">{money(p.price)}</span>
+                <span className="font-medium tabular-nums">{money(p.prices[priceType])}</span>
               </button>
             </li>
           ))}

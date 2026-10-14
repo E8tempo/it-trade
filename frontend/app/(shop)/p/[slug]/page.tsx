@@ -1,4 +1,4 @@
-import { Info, Package, ShieldCheck } from "lucide-react";
+import { Package, ShieldCheck } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -7,10 +7,12 @@ import { Suspense } from "react";
 import { Breadcrumbs } from "@/components/catalog/breadcrumbs";
 import { ProductGridSkeleton } from "@/components/catalog/listing";
 import { ProductGrid } from "@/components/catalog/product-card";
+import { AddToCart } from "@/components/product/add-to-cart";
+import { ProductPrice } from "@/components/product/product-price";
 import { Gallery } from "@/components/product/gallery";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getProduct, getProducts } from "@/lib/catalog";
-import { cleanDescription, formatNumber, formatPrice, pluralize } from "@/lib/format";
+import { cleanDescription, formatNumber, pluralize } from "@/lib/format";
 import type { ProductDetail } from "@/lib/types";
 import { categoryHref, idFromSlug, productHref } from "@/lib/urls";
 
@@ -30,7 +32,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const image = product.images[0]?.urls.lg;
   return {
     title: product.name,
-    description: [product.name, product.price != null && formatPrice(product.price), product.in_stock && "в наличии"]
+    description: [product.name, product.vendor, product.in_stock && "в наличии, оптом для бизнеса"]
       .filter(Boolean)
       .join(" — "),
     alternates: { canonical: productHref(product) },
@@ -98,28 +100,26 @@ function ProductSummary({ product: p }: { product: ProductDetail }) {
 
       <div className="space-y-5 rounded-3xl border p-5 sm:p-6">
         <div className="space-y-2">
-          <p className="text-[32px] leading-none font-semibold tracking-tight tabular-nums">{formatPrice(p.price)}</p>
+          <ProductPrice sku={p.sku} path={productHref(p)} />
           <StockStatus inStock={p.in_stock} />
         </div>
-        {/* TODO: "add to cart" once the cart and checkout are implemented */}
-        <ul className="space-y-2.5 border-t pt-4 text-sm">
-          <li className="flex items-start gap-2.5 text-muted-foreground">
-            <Info className="mt-0.5 size-4 shrink-0" />
-            Заказ через сайт скоро будет доступен
-          </li>
-          {!!p.warranty_months && (
-            <li className="flex items-center gap-2.5">
-              <ShieldCheck className="size-4 text-muted-foreground" />
-              Гарантия {p.warranty_months} {pluralize(p.warranty_months, ["месяц", "месяца", "месяцев"])}
-            </li>
-          )}
-          {p.multiplicity > 1 && (
-            <li className="flex items-center gap-2.5">
-              <Package className="size-4 text-muted-foreground" />
-              Продаётся упаковками по {p.multiplicity} шт.
-            </li>
-          )}
-        </ul>
+        {p.in_stock && <AddToCart sku={p.sku} name={p.name} multiplicity={p.multiplicity} />}
+        {(!!p.warranty_months || p.multiplicity > 1) && (
+          <ul className="space-y-2.5 border-t pt-4 text-sm">
+            {!!p.warranty_months && (
+              <li className="flex items-center gap-2.5">
+                <ShieldCheck className="size-4 text-muted-foreground" />
+                Гарантия {p.warranty_months} {pluralize(p.warranty_months, ["месяц", "месяца", "месяцев"])}
+              </li>
+            )}
+            {p.multiplicity > 1 && (
+              <li className="flex items-center gap-2.5">
+                <Package className="size-4 text-muted-foreground" />
+                Продаётся упаковками по {p.multiplicity} шт.
+              </li>
+            )}
+          </ul>
+        )}
       </div>
     </div>
   );

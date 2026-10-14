@@ -86,7 +86,7 @@ export default function ImagePipeline() {
         <Link href="/admin/docs/watermark-history">«Версии снятия знака»</Link>), и тогда фото старых версий обрабатываются заново
         сами. Товары не в наличии по умолчанию обрабатываются только при первом просмотре (<code>IMAGE_PREFETCH_OUT_OF_STOCK</code>
         ). Сколько фото на товар, грузить ли остальные фото заранее, скорость и пауза — на странице{" "}
-        <Link href="/admin/loading">«Загрузка каталога»</Link>.
+        <Link href="/admin/suppliers/itp/loading">«Загрузка каталога»</Link>.
       </p>
 
       <h2 id="limits">Скорость и лимиты</h2>
@@ -202,7 +202,7 @@ export default function ImagePipeline() {
       <Note>
         Как именно снимается знак — в разделах <Link href="/admin/docs/watermark-detection">«Поиск знака»</Link> и{" "}
         <Link href="/admin/docs/watermark-removal">«Снятие знака»</Link>. Очередь, ошибки, пауза и переобработка — на странице{" "}
-        <Link href="/admin/loading">«Загрузка каталога»</Link>.
+        <Link href="/admin/suppliers/itp/loading">«Загрузка каталога»</Link>.
       </Note>
 
       <Code

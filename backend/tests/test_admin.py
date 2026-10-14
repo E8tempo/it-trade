@@ -1,4 +1,5 @@
 import io
+from decimal import Decimal
 
 import numpy as np
 import pytest
@@ -9,9 +10,16 @@ from test_watermark import apply_watermark, expected_detection, synthetic_photo
 from app.auth import ensure_admin
 from app.db import SessionLocal
 from app.images.watermark import default_remover
-from app.models import Category, Product, ProductImage
+from app.models import Category, PriceType, Product, ProductImage
 from app.models.catalog import ImageStatus
 from app.sync.stock import apply_stock
+
+
+async def db_price(sku: int) -> tuple:
+    """The retail cash and cashless prices as stored (the public catalog shows none)."""
+    async with SessionLocal() as s:
+        p = await s.get(Product, sku)
+        return p.price, p.price_retail_cashless
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -49,6 +57,8 @@ async def test_pricing_preview_and_impact(admin):
     assert d["markup_percent"] == 10 and d["markup_category"]["id"] == 1
     assert d["floor"] == 1734 and d["price"] == 1800 and d["margin"] == 566
     assert [c["id"] for c in d["category_path"]] == [1, 2]
+    # the tried rules are retail cash's (the default type), the other types keep the saved ones (20%, rounded to 10)
+    assert d["by_type"] == {"retail_cash": 1800, "retail_cashless": 1490, "wholesale_cash": 1490, "wholesale_cashless": 1490}
 
     # saved rules are the defaults (20%): 50000 -> 60000, 40000 -> 48000; with 25% both go up
     r = await admin.post("/api/admin/pricing/impact", json={"settings": {**rules, "markup_percent": 25, "category_markups": {}, "min_markup": 0}})
@@ -56,17 +66,24 @@ async def test_pricing_preview_and_impact(admin):
     assert (d["products"], d["changed"], d["up"], d["down"]) == (2, 2, 2, 0)
     assert (d["avg_markup_before"], d["avg_markup_after"]) == (20.0, 25.0)
     assert d["examples"][0] == {"sku": 10, "name": "Ноутбук Lenovo V15", "supplier_price": 50000, "before": 60000, "after": 62500}
+    assert d["above_retail"] is None  # only counted for the wholesale types
 
 
 async def test_fixed_price_and_hiding(admin, client):
-    r = await admin.patch("/api/admin/products/10", json={"price_override": 55555})
-    assert r.status_code == 200 and r.json()["price"] == 55555
-    # a fixed price survives repricing and stock updates
-    await admin.put("/api/admin/settings/pricing", json={"markup_percent": 30, "round_to": 1, "use_rrp": False})
+    r = await admin.patch("/api/admin/products/10", json={"price_overrides": {"retail_cash": 55555, "wholesale_cash": 50500.5}})
+    d = r.json()
+    assert r.status_code == 200 and d["price"] == 55555 and d["price_overrides"] == {"retail_cash": 55555, "wholesale_cash": 50500.5}
+    assert d["prices"] == {"retail_cash": 55555, "retail_cashless": 60000, "wholesale_cash": 50500.5, "wholesale_cashless": 60000}
+    # fixed prices survive repricing and stock updates, the other types follow their rules
+    for t in PriceType:
+        r = await admin.put(f"/api/admin/suppliers/itp/pricing/{t}", json={"markup_percent": 30, "round_to": 1, "use_rrp": False})
+        assert r.status_code == 200
     await apply_stock([{"sku": 10, "price": 51000, "real_qty": 3}, {"sku": 11, "price": 40000, "real_qty": 1}])
-    assert (await client.get("/api/products/10")).json()["price"] == 55555.0
-    r = await admin.patch("/api/admin/products/10", json={"price_override": None})
-    assert r.json()["price_override"] is None and r.json()["price"] == 66300
+    assert await db_price(10) == (Decimal(55555), Decimal(66300))
+    r = await admin.patch("/api/admin/products/10", json={"price_overrides": {"retail_cash": None}})
+    assert r.json()["price_overrides"] == {"wholesale_cash": 50500.5} and r.json()["price"] == 66300
+    r = await admin.patch("/api/admin/products/10", json={"price_overrides": {"wholesale_cash": None}})
+    assert r.json()["price_overrides"] == {} and r.json()["prices"]["wholesale_cash"] == 66300
 
     r = await admin.get("/api/admin/products", params={"q": "ноутбук", "sort": "price"})
     assert [p["sku"] for p in r.json()["items"]] == [10, 11]
@@ -92,6 +109,7 @@ async def test_order_lifecycle(admin):
     assert r.status_code == 201, r.text
     o = r.json()
     assert o["number"] == f"{o['id']:06d}" and o["status"] == "new" and o["phone"] == "+79781234567"
+    assert (o["payment_method"], o["price_type"], o["user_id"]) == ("cash", "retail_cash", None)
     price10 = float(o["items"][0]["price"])
     assert float(o["items_total"]) == price10 * 2 + 990 and float(o["total"]) == price10 * 2 + 990 + 300
     assert len(o["events"]) == 1

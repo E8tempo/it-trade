@@ -1,6 +1,7 @@
 "use client";
 
 import { ExternalLink, LoaderCircle } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -12,8 +13,9 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { apiErrorText } from "@/lib/admin/errors";
-import { DELIVERY, money, ORDER_STATUSES, SOURCE, STATUS, when } from "@/lib/admin/labels";
-import type { Order, OrderStatus } from "@/lib/admin/types";
+import { AUDIENCE, contractTerms, day, DELIVERY, money, ORDER_STATUSES, PAYMENT, SOURCE, STATUS, when } from "@/lib/admin/labels";
+import { PRICE_TYPE, priceType } from "@/lib/admin/suppliers";
+import type { Audience, Order, OrderStatus, PaymentMethod } from "@/lib/admin/types";
 import { api } from "@/lib/api/client";
 import { productHref } from "@/lib/urls";
 
@@ -57,16 +59,19 @@ export function OrderEditor({ order }: { order: Order }) {
     <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
       <div className="space-y-6">
         <ItemsPanel key={`items-${order.updated_at}`} order={order} final={final} busy={busy === "items"} onSave={patch} />
+        {order.buyer && <BuyerPanel order={order} />}
         <CustomerPanel key={`customer-${order.updated_at}`} order={order} busy={busy === "customer"} onSave={patch} />
         <History order={order} />
       </div>
       <div className="space-y-6">
         <StatusPanel key={`status-${order.updated_at}`} order={order} busy={busy === "status"} onSave={patch} />
+        <PaymentPanel key={`payment-${order.updated_at}`} order={order} busy={busy === "payment"} onSave={patch} />
         <Panel title="Сведения">
           <dl className="space-y-2 text-sm">
             <Info label="Создан" value={when(order.created_at)} />
             <Info label="Изменён" value={when(order.updated_at)} />
             <Info label="Источник" value={SOURCE[order.source]} />
+            <Info label="Аккаунт на сайте" value={order.user_id != null ? "есть" : "нет"} />
             <Info label="Получение" value={DELIVERY[order.delivery]} />
             <Info label="Закупка" value={money(order.cost_total)} />
           </dl>
@@ -118,6 +123,71 @@ function StatusPanel({ order, busy, onSave }: { order: Order; busy: boolean; onS
   );
 }
 
+/** How the customer pays and whose prices apply. The lines keep the prices they were added with. */
+function PaymentPanel({ order, busy, onSave }: { order: Order; busy: boolean; onSave: SaveFn }) {
+  const audienceNow = PRICE_TYPE[order.price_type].audience;
+  const [payment, setPayment] = useState<PaymentMethod>(order.payment_method);
+  const [audience, setAudience] = useState<Audience>(audienceNow);
+  const changes = [
+    payment !== order.payment_method && `Оплата: ${PAYMENT[payment]}`,
+    audience !== audienceNow && `Цены: ${AUDIENCE[audience]}`,
+  ].filter(Boolean);
+  return (
+    <Panel title="Оплата и цены">
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Оплата">
+            <Select items={PAYMENT} value={payment} onValueChange={(v) => v && setPayment(v as PaymentMethod)}>
+              <SelectTrigger className="h-9 w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(PAYMENT).map(([k, label]) => (
+                  <SelectItem key={k} value={k}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label="Цены">
+            <Select items={AUDIENCE} value={audience} onValueChange={(v) => v && setAudience(v as Audience)}>
+              <SelectTrigger className="h-9 w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(AUDIENCE).map(([k, label]) => (
+                  <SelectItem key={k} value={k}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Цены товаров, которые уже в заказе, не изменятся. Новые товары добавятся по цене «{PRICE_TYPE[priceType(audience, payment)].label}».
+        </p>
+        <Button
+          variant="outline"
+          className="w-full"
+          disabled={busy || changes.length === 0}
+          onClick={() =>
+            onSave(
+              "payment",
+              { ...(payment !== order.payment_method && { payment_method: payment }), ...(audience !== audienceNow && { audience }) },
+              changes.join(", "),
+            )
+          }
+        >
+          {busy && <LoaderCircle className="animate-spin" />}
+          Сохранить
+        </Button>
+      </div>
+    </Panel>
+  );
+}
+
 function ItemsPanel({ order, final, busy, onSave }: { order: Order; final: boolean; busy: boolean; onSave: SaveFn }) {
   const [lines, setLines] = useState<Line[]>(linesOf(order));
   const [delivery, setDelivery] = useState(order.delivery_price);
@@ -127,7 +197,7 @@ function ItemsPanel({ order, final, busy, onSave }: { order: Order; final: boole
   return (
     <Panel title="Состав заказа">
       {final && <p className="mb-3 text-sm text-muted-foreground">Заказ {STATUS[order.status].label.toLowerCase()}, состав больше не меняется.</p>}
-      <ItemsEditor lines={lines} onChange={setLines} disabled={final} />
+      <ItemsEditor lines={lines} onChange={setLines} priceType={order.price_type} disabled={final} />
       <ul className="mt-3 space-y-1 text-xs text-muted-foreground">
         {order.items
           .filter((i) => i.slug)
@@ -217,6 +287,38 @@ function NotePanel({ order, busy, onSave }: { order: Order; busy: boolean; onSav
         {busy && <LoaderCircle className="animate-spin" />}
         Сохранить заметку
       </Button>
+    </Panel>
+  );
+}
+
+/** The organization the order was placed for, with the requisites and contract as they were at checkout. */
+function BuyerPanel({ order }: { order: Order }) {
+  const b = order.buyer!;
+  return (
+    <Panel
+      title="Организация"
+      action={
+        order.organization_id != null ? (
+          <Link href={`/admin/organizations/${order.organization_id}`} className="text-sm text-primary hover:underline">
+            Карточка организации
+          </Link>
+        ) : (
+          <span className="text-xs text-muted-foreground">удалена</span>
+        )
+      }
+    >
+      <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+        <Info label="Название" value={b.name} />
+        <Info label="ИНН" value={b.inn} />
+        {b.kpp && <Info label="КПП" value={b.kpp} />}
+        {b.ogrn && <Info label={b.ogrn.length === 15 ? "ОГРНИП" : "ОГРН"} value={b.ogrn} />}
+        {b.address && <Info label="Адрес" value={b.address} />}
+        <Info
+          label="Договор"
+          value={b.contract ? `№ ${b.contract.number} от ${day(b.contract.signed_on)}, ${contractTerms(b.contract)}` : "не выбран"}
+        />
+      </dl>
+      <p className="mt-3 text-xs text-muted-foreground">Реквизиты на момент оформления заказа.</p>
     </Panel>
   );
 }

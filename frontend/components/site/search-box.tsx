@@ -5,8 +5,9 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useId, useState, type KeyboardEvent } from "react";
 
+import { CardPrice } from "@/components/catalog/card-price";
 import { ProductImage } from "@/components/catalog/product-image";
-import { countLabel, formatPrice } from "@/lib/format";
+import { countLabel } from "@/lib/format";
 import { useDebounced } from "@/lib/hooks";
 import type { ProductCard, ProductPage } from "@/lib/types";
 import { productHref } from "@/lib/urls";
@@ -173,7 +174,7 @@ function SearchBoxInner({ initial, className }: { initial: string; className?: s
                         <span className="line-clamp-2 text-sm leading-snug">{p.name}</span>
                         {p.part && <span className="font-mono text-xs text-muted-foreground">{p.part}</span>}
                       </span>
-                      <span className="shrink-0 text-sm font-semibold tabular-nums">{formatPrice(p.price)}</span>
+                      <CardPrice sku={p.sku} quiet className="shrink-0 text-sm font-semibold tabular-nums" />
                     </Link>
                   </li>
                 ))}

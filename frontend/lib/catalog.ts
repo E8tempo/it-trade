@@ -5,6 +5,7 @@ import type {
   CategoryDetail,
   CategoryNode,
   ListingQuery,
+  Post,
   ProductDetail,
   ProductPage,
   Shop,
@@ -30,6 +31,14 @@ export async function getCategory(id: number): Promise<CategoryDetail | null> {
   return orNull(apiPublic<CategoryDetail>(`/api/categories/${id}`));
 }
 
+/** Published news and current promotions (the admin panel's changes show within the cache's 5 minutes). */
+export async function getPosts(limit = 6): Promise<Post[]> {
+  "use cache";
+  cacheLife("catalog");
+  cacheTag("posts");
+  return apiPublic<Post[]>(`/api/posts?limit=${limit}`);
+}
+
 export async function getShop(): Promise<Shop> {
   "use cache";
   cacheLife("structure");
@@ -52,8 +61,6 @@ export async function getProducts(query: ListingQuery, options: ProductsOptions 
   if (query.q) sp.set("q", query.q);
   if (query.category) sp.set("category", String(query.category));
   for (const v of query.vendors) sp.append("vendor", v);
-  if (query.min) sp.set("min_price", String(query.min));
-  if (query.max) sp.set("max_price", String(query.max));
   sp.set("sort", query.sort);
   sp.set("page", String(query.page));
   sp.set("per_page", String(options.perPage ?? 24));
