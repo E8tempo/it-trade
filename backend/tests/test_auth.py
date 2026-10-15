@@ -176,3 +176,12 @@ def test_company_parsing():
                  "name": {"short_with_opf": "ИП Иванов Иван Иванович"}, "address": {"value": "г Симферополь"}},
     })
     assert c.sole_trader and c.kpp is None and c.name == "ИП Иванов Иван Иванович" and c.manager is None
+
+
+async def test_registration_throttling(client):
+    for i in range(10):
+        r = await client.post("/api/auth/register", json={"email": f"bot{i}@example.com", "password": "secret-123", "organization": {"name": "ООО «Бот»", "inn": company_inn(8000 + i)}})
+        assert r.status_code == 201, r.text
+        client.cookies.clear()
+    r = await client.post("/api/auth/register", json={"email": "bot10@example.com", "password": "secret-123", "organization": {"name": "ООО «Бот»", "inn": company_inn(8010)}})
+    assert r.status_code == 429

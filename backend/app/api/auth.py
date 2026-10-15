@@ -153,6 +153,10 @@ async def company(inn: Annotated[str, Query(pattern=r"^\d{10}(\d{2})?$")], reque
 @router.post("/register", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterIn, request: Request, response: Response, session: Session):
     _check_throttle(f"ip:{client_ip(request)}")
+    # every registration counts, not only the failed ones: no mass sign-ups from one address
+    signups = f"register:{client_ip(request)}"
+    _check_throttle(signups)
+    _record_failure(signups)
     await check_not_registered(session, body.organization.inn, body.organization.kpp)
     user = User(email=normalize_email(body.email), password_hash=hash_password(body.password), name=body.name, phone=body.phone)
     session.add(user)
