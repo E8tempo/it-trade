@@ -40,3 +40,20 @@ class RefreshToken(Base):
     revoked_at: Mapped[datetime | None]
     replaced_by: Mapped[str | None] = mapped_column(String(32))  # successor jti if revoked by rotation
     user_agent: Mapped[str | None] = mapped_column(String(255))
+
+
+class EmailCode(Base):
+    """A one-time code sent to an e-mail address (6 digits; only its hash is stored): proves the address belongs to
+    whoever registers with it, before the account is created. The latest code of an address and purpose counts;
+    it lasts a quarter of an hour and allows a few attempts (app/api/auth.py)."""
+
+    __tablename__ = "email_codes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), index=True)  # lower-cased
+    purpose: Mapped[str] = mapped_column(String(16))  # "signup"
+    code_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    expires_at: Mapped[datetime]
+    attempts: Mapped[int] = mapped_column(default=0)
+    used_at: Mapped[datetime | None]

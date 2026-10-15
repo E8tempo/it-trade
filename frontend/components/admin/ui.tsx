@@ -69,3 +69,71 @@ export function OrgStatusBadge({ status, className }: { status: OrganizationStat
 export function Empty({ children }: { children: React.ReactNode }) {
   return <div className="rounded-xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">{children}</div>;
 }
+
+/**
+ * A card with a ruled header (title, a line of description, actions on the right), rows or any body, and an
+ * optional footer under a rule — the account's style, used where a panel has several parts.
+ */
+export function Card({
+  title,
+  description,
+  action,
+  footer,
+  className,
+  bodyClassName,
+  children,
+}: {
+  title: React.ReactNode;
+  description?: React.ReactNode;
+  action?: React.ReactNode;
+  footer?: React.ReactNode;
+  className?: string;
+  bodyClassName?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className={cn("overflow-hidden rounded-2xl bg-background ring-1 ring-foreground/10", className)}>
+      <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 border-b px-5 py-4">
+        <div className="min-w-0">
+          <h2 className="font-semibold">{title}</h2>
+          {description && <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">{description}</p>}
+        </div>
+        {action && <div className="flex shrink-0 flex-wrap items-center gap-2">{action}</div>}
+      </header>
+      <div className={cn("px-5", bodyClassName)}>{children}</div>
+      {footer && <footer className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t bg-muted/30 px-5 py-3 text-sm">{footer}</footer>}
+    </section>
+  );
+}
+
+/** A line of a Card: an icon in a tinted square, a title with details under it, and something on the right. */
+export function CardLine({
+  icon: Icon,
+  tone = "bg-muted text-muted-foreground",
+  spin,
+  title,
+  aside,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  tone?: string; // classes of the icon's square
+  spin?: boolean;
+  title: React.ReactNode;
+  aside?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="flex gap-4 border-b py-4 last:border-0">
+      <span className={cn("grid size-9 shrink-0 place-items-center rounded-xl", tone)}>
+        <Icon className={cn("size-4", spin && "animate-spin [animation-duration:2.5s]")} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <div className="min-w-0 text-sm font-medium">{title}</div>
+          {aside && <div className="shrink-0 text-sm">{aside}</div>}
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}

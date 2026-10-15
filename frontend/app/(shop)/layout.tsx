@@ -1,3 +1,4 @@
+import { RequireSession } from "@/components/shop/require-session";
 import { SessionProvider } from "@/components/shop/session-provider";
 import { ClientSidebar } from "@/components/site/client-panel";
 import { SiteFooter } from "@/components/site/footer";
@@ -8,6 +9,7 @@ export default function ShopLayout({ children }: LayoutProps<"/">) {
   return (
     // the session and the cart are loaded in the browser: pages stay the same for everyone
     <SessionProvider>
+      <RequireSession />
       <SiteHeader />
       <div className="flex flex-1">
         {/* a client's sections, from lg up; a guest has none. The footer is in the content's column, so the

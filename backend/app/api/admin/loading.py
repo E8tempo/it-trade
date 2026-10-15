@@ -29,10 +29,12 @@ from app.images.watermark import default_remover
 from app.models import Category, JobState, Product, ProductImage
 from app.models.base import utcnow
 from app.models.catalog import VISIBLE_STATUSES, ImageStatus
-from app.site_settings import SITE_RPS_MIN, ImageSettings, ShopSettings, get_settings_obj
+from app.site_settings import SITE_RPS_MIN, ImageSettings, ShopSettings, SyncSettings, get_settings_obj
 from app.supplier.client import IMAGE_RPS_LIMIT
 from app.sync.images import LIST_BATCH
-from app.worker import HEARTBEAT_EVERY, TRIAL, WORKER
+from app.version import code_fingerprint
+from app.worker import HEARTBEAT_EVERY, RETRY, RETRY_AFTER, TRIAL, WORKER, scheduled_at
+from app.worker import jobs as worker_jobs
 
 router = APIRouter()
 
@@ -136,6 +138,7 @@ async def loading(session: Session) -> dict[str, Any]:
     s = get_settings()
     now = utcnow()
     cfg = await get_settings_obj(session, ImageSettings)
+    sync = await get_settings_obj(session, SyncSettings)
     jobs = {j.name: j for j in (await session.scalars(select(JobState))).all()}
     worker = _worker(jobs.get(WORKER), now)
     trial = await _trial(session, jobs.get(TRIAL))
@@ -237,6 +240,11 @@ async def loading(session: Session) -> dict[str, Any]:
         "generated_at": now,
         "version": VERSION,
         "settings": cfg.model_dump(),
+        "sync": sync.model_dump(),
+        "schedule": {
+            "stock": _next_sync(("stock",), jobs, sync, now),
+            "catalog": _next_sync(("categories", "products"), jobs, sync, now),
+        },
         "limits": {
             "download_rps_max": IMAGE_RPS_LIMIT - SITE_RPS_MIN,
             "supplier_rps": IMAGE_RPS_LIMIT,
@@ -287,13 +295,56 @@ def _photo_status(left: int, running: bool, paused: bool, alive: bool, known: bo
     return "running" if running else "waiting"
 
 
+def _job_running(j: JobState | None) -> bool:
+    return bool(j and j.last_started_at and (j.last_finished_at is None or j.last_finished_at < j.last_started_at))
+
+
+def _job_failed(j: JobState | None) -> bool:
+    """The last run ended with an error (a run going on now does not count: it may well succeed)."""
+    return bool(
+        j and j.last_error and not _job_running(j) and (j.last_success_at is None or j.last_success_at < j.last_started_at)
+    )
+
+
+LOGIN_FAILED = "login failed"
+
+
+def _error_text(error: str) -> str:
+    """'app.supplier.client.SupplierError: login failed: ...' -> what it means, without the class path."""
+    if LOGIN_FAILED in error:
+        return "Поставщик не принял логин и пароль"
+    return re.sub(r"^(app|httpx)\.[\w.]+: ", "", error)
+
+
+def _next_sync(names: tuple[str, ...], jobs: dict[str, JobState], cfg: SyncSettings, now: datetime) -> dict[str, Any]:
+    """When the worker runs a sync next (for the timers on the page); a group (the category tree, then the
+    catalog) is described by its first job that is not done. "due": its time has come, the worker takes it
+    within half a minute, or after the job it is running now (`after`)."""
+    by_name = {j.name: j for j in worker_jobs()}
+    states = [jobs.get(n) for n in names]
+    last = min((st.last_success_at for st in states if st and st.last_success_at), default=None)
+    busy = next((SYNC_JOBS[j.name] for j in jobs.values() if j.name in SYNC_JOBS and _job_running(j)), None)
+    out = {"last_success_at": last, "busy": None}
+    if any(_job_running(st) for st in states):
+        return {**out, "state": "running", "next_at": None}
+    if failed := next((st for st in states if _job_failed(st)), None):
+        at = now if failed.info.get(RETRY) else failed.last_started_at + RETRY_AFTER
+        return {**out, "state": "due" if at <= now else "retry", "next_at": at, "busy": busy}
+    job, st = by_name[names[0]], states[0]
+    dep = jobs.get(job.after) if job.after else None
+    if st is None or st.last_started_at is None or (job.after and not (dep and dep.last_success_at)):
+        return {**out, "state": "waiting", "next_at": None}
+    at = scheduled_at(job, st, now, cfg)
+    return {**out, "state": "due" if at <= now else "scheduled", "next_at": at, "busy": busy}
+
+
 def _sync_stage(key: str, jobs: dict[str, JobState], detail: str) -> dict[str, Any]:
     j = jobs.get(key)
     if j is None or j.last_started_at is None:
         status = "waiting"
-    elif j.last_finished_at is None or j.last_finished_at < j.last_started_at:
+    elif _job_running(j):
         status = "running"
-    elif j.last_error and (j.last_success_at is None or j.last_success_at < j.last_started_at):
+    elif _job_failed(j):
         status = "error"
     else:
         status = "done"
@@ -314,7 +365,10 @@ def _sync_stage(key: str, jobs: dict[str, JobState], detail: str) -> dict[str, A
         "progress": share,
         "phase": f"{PHASES[phase]}{f', {done}' if done else ''}" if phase in PHASES else None,
         "last_success_at": j.last_success_at if j else None,
-        "error": j.last_error if status == "error" and j else None,
+        "error": _error_text(j.last_error) if status == "error" and j else None,
+        # a failed sync is run again after a pause, or at once when asked
+        "retry_at": (None if j.info.get(RETRY) else j.last_started_at + RETRY_AFTER) if status == "error" and j else None,
+        "retry_requested": bool(status == "error" and j and j.info.get(RETRY)),
     }
 
 
@@ -326,6 +380,8 @@ def _worker(st: JobState | None, now: datetime) -> dict[str, Any]:
         "heartbeat": beat,
         "started_at": st.last_started_at if st else None,
         "activity": info.get("activity"),
+        # started before the code changed (an older worker without the fingerprint counts as one too)
+        "outdated": info.get("code") != code_fingerprint(),
         "image_workers": info.get("image_workers"),
         "cpus": info.get("cpus"),
     }
@@ -359,33 +415,50 @@ async def _checks(session, jobs, worker, trial, cfg: ImageSettings, left_bytes: 
     s = get_settings()
     checks = []
 
-    def add(key: str, title: str, status: str, detail: str, hint: str | None = None) -> None:
-        checks.append({"key": key, "title": title, "status": status, "detail": detail, "hint": hint})
+    def add(key: str, title: str, status: str, detail: str, hint: str | None = None, action: str | None = None) -> None:
+        checks.append({"key": key, "title": title, "status": status, "detail": detail, "hint": hint, "action": action})
 
     # supplier
     if not (s.supplier_login and s.supplier_password.get_secret_value()):
         add("supplier", "Поставщик", "error", "Логин и пароль поставщика не заданы", "SUPPLIER_LOGIN и SUPPLIER_PASSWORD в .env")
     else:
-        runs = [jobs.get(k) for k in SYNC_JOBS]
-        broken = [
-            (SYNC_JOBS[j.name], j.last_error)
-            for j in runs
-            if j and j.last_error and (j.last_success_at is None or j.last_success_at < j.last_started_at)
-        ]
-        last = max((j.last_success_at for j in runs if j and j.last_success_at), default=None)
+        runs = [j for k in SYNC_JOBS if (j := jobs.get(k))]
+        broken = [j for j in runs if _job_failed(j)]
+        running = [SYNC_JOBS[j.name] for j in runs if _job_running(j)]
+        last = max((j.last_success_at for j in runs if j.last_success_at), default=None)
+        now_doing = f"; сейчас: {', '.join(running).lower()}" if running else ""
         if broken:
-            name, error = broken[0]
-            add("supplier", "Поставщик", "error", f"{name}: {error[:300]}", "Подробности — в логе воркера")
+            j = broken[0]
+            login = LOGIN_FAILED in (j.last_error or "")
+            add(
+                "supplier",
+                "Поставщик",
+                "error",
+                f"{SYNC_JOBS[j.name]}: {_error_text(j.last_error)[:300]}",
+                "Проверьте SUPPLIER_LOGIN и SUPPLIER_PASSWORD в .env (в разработке backend/.env перекрывает корневой) "
+                "и перезапустите воркер: .env читается при запуске, после перезапуска обмен повторится сразу"
+                if login
+                else "Подробности — в логе воркера",
+                action="retry",
+            )
         elif last is None:
-            add("supplier", "Поставщик", "wait", "Ждём первого обмена: воркер начинает с дерева категорий")
+            add("supplier", "Поставщик", "wait", "Идёт первый обмен" + now_doing if running else "Ждём первого обмена: воркер начинает с дерева категорий")
         else:
-            add("supplier", "Поставщик", "ok", f"Обмен идёт, последний успешный — {_ago(last)}")
+            add("supplier", "Поставщик", "ok", f"Обмен идёт, последний успешный — {_ago(last)}{now_doing}")
 
     # worker
     if worker["heartbeat"] is None:
         add("worker", "Воркер", "error", "Воркер ещё ни разу не запускался", "docker compose up -d worker")
     elif not worker["alive"]:
         add("worker", "Воркер", "error", f"Воркер не отвечает {_ago(worker['heartbeat'])}", "docker compose logs worker")
+    elif worker["outdated"]:
+        add(
+            "worker",
+            "Воркер",
+            "warn",
+            "Воркер запущен со старым кодом: код изменился после его запуска, новые настройки и исправления он не видит",
+            "Перезапустите воркер: docker compose restart worker (в разработке dev.sh перезапускает его сам)",
+        )
     else:
         add("worker", "Воркер", "ok", f"Работает {_ago(worker['started_at'], suffix='')}; процессов обработки фото: {worker['image_workers']}")
 
@@ -568,6 +641,19 @@ async def start_trial(body: TrialIn, session: Session) -> dict[str, Any]:
     session.add(st)
     await session.commit()
     return st.info
+
+
+@router.post("/loading/retry")
+async def retry_syncs(session: Session) -> dict[str, int]:
+    """The supplier syncs that failed run again at once, without waiting for the pause after an error
+    (the worker looks at its jobs every 30 seconds)."""
+    n = 0
+    for j in (await session.scalars(select(JobState).where(JobState.name.in_(SYNC_JOBS)))).all():
+        if _job_failed(j):
+            j.info = {**(j.info or {}), RETRY: True}
+            n += 1
+    await session.commit()
+    return {"queued": n}
 
 
 @router.post("/images/retry-failed")

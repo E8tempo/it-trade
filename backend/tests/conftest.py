@@ -1,5 +1,6 @@
 import itertools
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -17,6 +18,7 @@ os.environ.update({
     "ADMIN_PASSWORD": "admin-pass-123",
     "SUPPLIER_LOGIN": "",
     "SUPPLIER_PASSWORD": "",
+    "DADATA_API_KEY": "",
     "CATALOG_SAMPLE_PER_CATEGORY": "0",
 })
 
@@ -54,10 +56,36 @@ def company_inn(n: int) -> str:
     return f"{base}{check}"
 
 
+# letters "sent" in the tests: (to, subject, text)
+OUTBOX: list[tuple[str, str, str]] = []
+
+
+@pytest.fixture(autouse=True)
+def mail_and_throttle(monkeypatch):
+    """Letters go to OUTBOX instead of SMTP; the per-address attempt limits start afresh in every test."""
+    import app.api.auth as auth_api
+
+    async def send(to, subject, text, html=None):
+        OUTBOX.append((to, subject, text))
+
+    monkeypatch.setattr(auth_api, "send_mail", send)
+    auth_api._failures.clear()
+    yield
+    OUTBOX.clear()
+
+
+async def signup_code(client: httpx.AsyncClient, email: str) -> str:
+    """Asks for the code that registers `email` and reads it from the letter."""
+    r = await client.post("/api/auth/register/code", json={"email": email})
+    assert r.status_code == 200, r.text
+    return re.search(r"\b(\d{6})\b", next(t for to, _, t in reversed(OUTBOX) if to == email.strip().lower())).group(1)
+
+
 async def register(client: httpx.AsyncClient, email: str, password: str = "secret-123", organization: dict | None = None, **fields) -> dict:
     """Registers a client with an organization of their own (a fresh ИНН unless given); the response's JSON."""
     org = organization or {"name": f"ООО «{email.split('@')[0]}»", "inn": company_inn(next(_inn_seq))}
-    r = await client.post("/api/auth/register", json={"email": email, "password": password, "organization": org, **fields})
+    code = fields.pop("code", None) or await signup_code(client, email)
+    r = await client.post("/api/auth/register", json={"email": email, "code": code, "password": password, "organization": org, **fields})
     assert r.status_code == 201, r.text
     return r.json()
 

@@ -21,15 +21,17 @@ from app.db import SessionLocal
 from app.images.processing import ProcessedImage
 from app.models import JobState
 from app.models.base import utcnow
-from app.site_settings import ImageSettings, get_settings_obj
+from app.site_settings import ImageSettings, SyncSettings, get_settings_obj
 from app.supplier.client import SupplierClient, SupplierUnavailable
 from app.sync.categories import sync_categories
 from app.sync.images import next_pending, pick_trial, process_one, sync_image_lists
 from app.sync.products import sync_products
 from app.sync.stock import sync_stock
+from app.version import code_fingerprint
 
 log = logging.getLogger("worker")
 RETRY_AFTER = timedelta(minutes=10)
+RETRY = "retry"  # info flag of a failed job: run it again at once (the "Повторить сейчас" button)
 # job_state rows that are not jobs: the worker's heartbeat and the trial batch asked for in the admin panel
 WORKER, TRIAL = "worker", "trial"
 HEARTBEAT_EVERY = 30  # seconds; the admin panel calls the worker stopped after a few missed ones
@@ -39,27 +41,57 @@ IDLE_WAIT = 10  # seconds between looks at the settings and the trial while ther
 EMPTY_QUEUE_WAIT = 60
 
 
+LISTS_EVERY = timedelta(minutes=2)
+
+
 @dataclass
 class Job:
     name: str
     run: Callable[[SupplierClient], Awaitable[dict]]
-    every: timedelta | None = None  # fixed interval...
-    daily: bool = False  # ...or once a day after settings.catalog_sync_hour
+    every: Callable[[SyncSettings], timedelta] | None = None  # an interval since the last start...
+    catalog: bool = False  # ...or the catalog slots (catalog_slot)
     after: str | None = None  # do not start before this job has succeeded at least once
 
 
 def jobs() -> list[Job]:
-    s = get_settings()
     return [
-        Job("categories", sync_categories, daily=True),
-        Job("products", sync_products, daily=True, after="categories"),
-        Job("stock", sync_stock, every=timedelta(minutes=max(6, s.stock_sync_interval_min)), after="products"),
-        Job("image_lists", sync_image_lists, every=timedelta(minutes=2), after="products"),
+        Job("categories", sync_categories, catalog=True),
+        Job("products", sync_products, catalog=True, after="categories"),
+        Job("stock", sync_stock, every=lambda c: timedelta(minutes=c.stock_every_min), after="products"),
+        Job("image_lists", sync_image_lists, every=lambda c: LISTS_EVERY, after="products"),
     ]
 
 
-def is_due(job: Job, st: JobState | None, now: datetime, states: dict[str, JobState], started_here: set[str] = frozenset()) -> bool:
-    s = get_settings()
+def catalog_slot(now: datetime, cfg: SyncSettings) -> datetime:
+    """The latest catalog slot at or before `now`: catalog_hour + k * catalog_every_hours, local time.
+    The interval divides 24, so the slots fall on the same hours every day (05:00, 11:00, 17:00, 23:00)."""
+    local = now.astimezone(ZoneInfo(get_settings().timezone))
+    n = cfg.catalog_every_hours
+    first = cfg.catalog_hour % n
+    if local.hour >= first:
+        day, hour = local, first + (local.hour - first) // n * n
+    else:  # before the first slot of the day: the last one of the day before
+        day, hour = local - timedelta(days=1), first + (23 - first) // n * n
+    return day.replace(hour=hour, minute=0, second=0, microsecond=0)
+
+
+def scheduled_at(job: Job, st: JobState, now: datetime, cfg: SyncSettings) -> datetime:
+    """When a job that has run before is due by its schedule (at or before `now`: due already)."""
+    if job.catalog:
+        slot = catalog_slot(now, cfg)
+        done = st.last_success_at is not None and st.last_success_at >= slot
+        return slot + timedelta(hours=cfg.catalog_every_hours) if done else slot
+    return st.last_started_at + job.every(cfg)
+
+
+def is_due(
+    job: Job,
+    st: JobState | None,
+    now: datetime,
+    states: dict[str, JobState],
+    started_here: set[str] = frozenset(),
+    cfg: SyncSettings | None = None,
+) -> bool:
     if job.after and not (states.get(job.after) and states[job.after].last_success_at):
         return False
     if st is None or st.last_started_at is None:
@@ -70,19 +102,19 @@ def is_due(job: Job, st: JobState | None, now: datetime, states: dict[str, JobSt
         return True
     failed = st.last_success_at is None or st.last_success_at < st.last_started_at
     if failed:
+        # at once when asked from the admin panel, or by a new worker process: it is usually restarted after
+        # the cause was fixed (e.g. the supplier's password in .env, which is read at start); else after a pause
+        if st.info.get(RETRY) or job.name not in started_here:
+            return True
         return now - st.last_started_at >= RETRY_AFTER
-    if job.daily:
-        tz = ZoneInfo(s.timezone)
-        local_now, last = now.astimezone(tz), st.last_success_at.astimezone(tz)
-        today_slot = local_now.replace(hour=s.catalog_sync_hour, minute=0, second=0, microsecond=0)
-        return local_now >= today_slot > last
-    return now - st.last_started_at >= job.every
+    return now >= scheduled_at(job, st, now, cfg or SyncSettings())
 
 
 async def run_job(job: Job, client: SupplierClient) -> None:
     async with SessionLocal() as session:
         st = await session.get(JobState, job.name) or JobState(name=job.name, info={})
         st.last_started_at = utcnow()
+        st.info = {k: v for k, v in (st.info or {}).items() if k != RETRY}
         session.add(st)
         await session.commit()
     log.info("job %s: started", job.name)
@@ -109,11 +141,12 @@ async def scheduler(client: SupplierClient, stop: asyncio.Event, state: dict) ->
     while not stop.is_set():
         async with SessionLocal() as session:
             states = {j.name: await session.get(JobState, j.name) for j in all_jobs}
+            cfg = await get_settings_obj(session, SyncSettings)  # edited in the admin panel: read every round
         now = utcnow()
         for job in all_jobs:
             if stop.is_set():
                 break
-            if is_due(job, states[job.name], now, states, started_here):
+            if is_due(job, states[job.name], now, states, started_here, cfg):
                 started_here.add(job.name)
                 await run_job(job, client)
                 state["queue_changed"] = True  # new products, photo lists or stock: maybe new photos
@@ -218,6 +251,7 @@ async def heartbeat(stop: asyncio.Event, state: dict) -> None:
     """Tells the admin panel that the worker runs and what it does (job_state row "worker")."""
     s = get_settings()
     started = utcnow()
+    code = code_fingerprint()  # the code this process runs, whatever changes on disk later
     async with SessionLocal() as session:
         # a trial cut short by a restart is not resumed: a new one can be started
         trial = await session.get(JobState, TRIAL)
@@ -234,6 +268,7 @@ async def heartbeat(stop: asyncio.Event, state: dict) -> None:
                 "pid": os.getpid(),
                 "cpus": os.cpu_count(),
                 "image_workers": s.image_workers,
+                "code": code,
                 **{k: v for k, v in state.items() if k != "queue_changed"},
             }
             session.add(st)

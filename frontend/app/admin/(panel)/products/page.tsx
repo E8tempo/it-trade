@@ -33,7 +33,7 @@ export default function ProductsPage({ searchParams }: Props) {
         title="Товары и цены"
         description={
           <>
-            У товара четыре цены — розница и опт, за наличные и по безналу. Каждая считается от закупочной цены по{" "}
+            Сайт продаёт оптом: у товара две цены — за наличные и по безналу. Каждая считается от закупочной цены по{" "}
             <Link href={`/admin/suppliers/${DEFAULT_SUPPLIER}`} className="text-primary hover:underline">
               правилам поставщика
             </Link>
@@ -72,8 +72,8 @@ async function ProductsContent({ searchParams }: Pick<Props, "searchParams">) {
 
   return (
     <Panel>
-      <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="no-scrollbar -mx-1 flex gap-1 overflow-x-auto px-1">
+      <div className="mb-4 flex flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
+        <div className="no-scrollbar -mx-1 flex shrink-0 gap-1 overflow-x-auto px-1">
           {Object.entries(VIEWS).map(([k, v]) => (
             <Link key={k} href={link({ view: k })} className={pill(view === k)}>
               {v.label}

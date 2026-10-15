@@ -2,7 +2,7 @@
 
 import time
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -43,8 +43,29 @@ class ImageSettings(BaseModel):
         return max(0.1, (IMAGE_RPS_LIMIT - self.download_rps) / max(1, processes))
 
 
+# Hours a day divides into evenly, so the catalog runs at the same local hours every day
+CATALOG_EVERY_HOURS = (1, 2, 3, 4, 6, 8, 12, 24)
+
+
+class SyncSettings(BaseModel):
+    """How often the worker syncs with the supplier (admin page "Загрузка каталога")."""
+
+    # the supplier allows get_active_products 10 times an hour
+    stock_every_min: int = Field(30, ge=6, le=1440, description="Prices and stock, every N minutes")
+    # the catalog file: 2 downloads an hour; the supplier updates it at night
+    catalog_every_hours: int = Field(24, description="Categories and the catalog, every N hours (a divisor of 24)")
+    catalog_hour: int = Field(5, ge=0, le=23, description="Local hour the catalog slots are counted from")
+
+    @field_validator("catalog_every_hours")
+    @classmethod
+    def _divides_day(cls, v: int) -> int:
+        if v not in CATALOG_EVERY_HOURS:
+            raise ValueError(f"one of {CATALOG_EVERY_HOURS}")
+        return v
+
+
 # Markup rules are kept per supplier, see app/pricing.py
-SETTINGS: dict[str, type[BaseModel]] = {"shop": ShopSettings, "images": ImageSettings}
+SETTINGS: dict[str, type[BaseModel]] = {"shop": ShopSettings, "images": ImageSettings, "sync": SyncSettings}
 
 
 async def get_settings_obj[T: BaseModel](session: AsyncSession, model: type[T]) -> T:

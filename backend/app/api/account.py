@@ -134,20 +134,36 @@ async def _member_of(session: AsyncSession, user: User, org_id: int, owner: bool
     return org
 
 
-async def check_not_registered(session: AsyncSession, inn: str, kpp: str | None, except_id: int | None = None) -> None:
-    """409 when the company is already a client: the same ИНН with the same КПП, or either without one."""
-    stmt = select(Organization.id).where(Organization.inn == inn)
-    if kpp:
-        stmt = stmt.where(or_(Organization.kpp == kpp, Organization.kpp.is_(None)))
+def same_company(inn: str, kpp: str | None):
+    """Organizations of the same company: the same ИНН with the same КПП, or either without one (a branch, with
+    its own КПП, is another client)."""
+    cond = Organization.inn == inn
+    return cond & or_(Organization.kpp == kpp, Organization.kpp.is_(None)) if kpp else cond
+
+
+async def is_registered(session: AsyncSession, inn: str, kpp: str | None = None, except_id: int | None = None) -> bool:
+    """The company is already a client: an *approved* organization of it. Requests that are not checked yet do
+    not count, so whoever registers someone else's ИНН first does not lock the real company out; a manager
+    approves one organization per company (admin/organizations.py: review)."""
+    stmt = select(Organization.id).where(same_company(inn, kpp), Organization.status == OrganizationStatus.approved)
     if except_id is not None:
         stmt = stmt.where(Organization.id != except_id)
-    if await session.scalar(stmt.limit(1)) is not None:
+    return await session.scalar(stmt.limit(1)) is not None
+
+
+async def check_not_registered(session: AsyncSession, inn: str, kpp: str | None, except_id: int | None = None) -> None:
+    """409 when the company is already a client (is_registered)."""
+    if await is_registered(session, inn, kpp, except_id):
         raise HTTPException(409, ALREADY_REGISTERED)
 
 
 async def create_organization(session: AsyncSession, user: User, body: OrganizationIn) -> Organization:
     """A new organization headed by the user, for a manager to check. The caller commits."""
     await check_not_registered(session, body.inn, body.kpp)
+    if user.id is not None:  # a new user (registration) has none yet
+        mine = select(Organization.id).join(OrganizationMember).where(OrganizationMember.user_id == user.id, same_company(body.inn, body.kpp))
+        if await session.scalar(mine.limit(1)) is not None:
+            raise HTTPException(409, "Эта организация уже есть в вашем кабинете")
     org = Organization(**body.model_dump(), status=OrganizationStatus.pending, contracts=[], members=[])
     org.members.append(OrganizationMember(user_id=user.id, role=MemberRole.owner))
     session.add(org)

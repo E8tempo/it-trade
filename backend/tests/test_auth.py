@@ -1,7 +1,8 @@
+import re
 from datetime import timedelta
 
 import pytest
-from conftest import company_inn, register, reset_db
+from conftest import company_inn, register, reset_db, signup_code
 
 import app.auth
 
@@ -22,7 +23,8 @@ def no_throttle():
 
 async def test_register_login_me_with_cookies_and_bearer(client):
     org = {"name": "ООО «Иван»", "inn": company_inn(9998)}
-    r = await client.post("/api/auth/register", json={"email": " Ivan@Example.com ", "password": "secret-123", "name": "Иван", "organization": org})
+    code = await signup_code(client, "ivan@example.com")
+    r = await client.post("/api/auth/register", json={"email": " Ivan@Example.com ", "code": code, "password": "secret-123", "name": "Иван", "organization": org})
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["user"]["email"] == "ivan@example.com" and body["user"]["role"] == "customer"
@@ -40,8 +42,8 @@ async def test_register_login_me_with_cookies_and_bearer(client):
     assert me.status_code == 200
 
     org = {"name": "ООО «Другая»", "inn": company_inn(9999)}
-    dup = await client.post("/api/auth/register", json={"email": "ivan@example.com", "password": "secret-123", "organization": org})
-    assert dup.status_code == 409
+    dup = await client.post("/api/auth/register", json={"email": "ivan@example.com", "code": code, "password": "secret-123", "organization": org})
+    assert dup.status_code == 400  # the code is used up; a registered address is refused like a wrong code
     bad = await client.post("/api/auth/login", json={"email": "ivan@example.com", "password": "wrong-pass"})
     assert bad.status_code == 401
     ok = await client.post("/api/auth/login", json={"email": "IVAN@example.com", "password": "secret-123"})
@@ -92,9 +94,13 @@ async def test_change_password_ends_other_sessions(client):
     old_refresh, access = r["refresh_token"], r["access_token"]
     client.cookies.clear()
     h = {"Authorization": f"Bearer {access}"}
-    wrong = await client.post("/api/auth/password", json={"current_password": "nope", "new_password": "secret-456"}, headers=h)
-    assert wrong.status_code == 400
-    ok = await client.post("/api/auth/password", json={"current_password": "secret-123", "new_password": "secret-456"}, headers=h)
+    # confirmed with a code sent to the e-mail, not with the current password
+    assert (await client.post("/api/auth/password", json={"code": "123456", "new_password": "secret-456"}, headers=h)).status_code == 400
+    assert (await client.post("/api/auth/password/code", json={"email": "pw@example.com"})).status_code == 200
+    from conftest import OUTBOX
+
+    code = re.search(r"\b(\d{6})\b", OUTBOX[-1][2]).group(1)
+    ok = await client.post("/api/auth/password", json={"code": code, "new_password": "secret-456"}, headers=h)
     assert ok.status_code == 200
     client.cookies.clear()
     assert (await client.post("/api/auth/refresh", json={"refresh_token": old_refresh})).status_code == 401
@@ -135,3 +141,201 @@ def test_empty_jwt_secret_in_env_file_counts_as_unset(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_ENV", "prod")
     with pytest.raises(ValidationError):
         Settings(_env_file=env)
+
+
+async def test_company_lookup_by_inn(client, monkeypatch):
+    import app.api.auth as auth_api
+    import app.companies as companies
+
+    inn = company_inn(7777)
+    # no DaData key: the form asks for the requisites by hand
+    r = await client.get("/api/auth/company", params={"inn": inn})
+    assert r.status_code == 200 and r.json() == {"configured": False, "available": False, "company": None, "registered": False}
+    assert (await client.get("/api/auth/company", params={"inn": "12345"})).status_code == 422
+
+    found = companies.Company(
+        inn=inn, kpp="910201001", ogrn="1149102000000", name="ООО «Лес»", full_name=None, address="Симферополь",
+        manager="Директор Петров П. П.", sole_trader=False, status="ACTIVE",
+    )
+
+    async def fake_find(q):
+        return found if q == inn else None
+
+    monkeypatch.setattr(auth_api, "find_company", fake_find)
+    r = (await client.get("/api/auth/company", params={"inn": inn})).json()
+    assert r["available"] and r["company"]["name"] == "ООО «Лес»" and r["registered"] is False
+    assert (await client.get("/api/auth/company", params={"inn": company_inn(7778)})).json()["company"] is None
+
+    # a request that is not checked yet does not count; an approved organization is a client, and the form says
+    # so before the rest is filled in
+    org = {"name": "ООО «Лес»", "inn": inn, "kpp": "910201001"}
+    await register(client, "les@example.com", organization=org)
+    client.cookies.clear()
+    assert (await client.get("/api/auth/company", params={"inn": inn})).json()["registered"] is False
+    from sqlalchemy import update
+
+    from app.db import SessionLocal
+    from app.models import Organization, OrganizationStatus
+
+    async with SessionLocal() as session:
+        await session.execute(update(Organization).where(Organization.inn == inn).values(status=OrganizationStatus.approved))
+        await session.commit()
+    assert (await client.get("/api/auth/company", params={"inn": inn})).json()["registered"] is True
+
+
+def test_company_parsing():
+    from app.companies import _parse
+
+    c = _parse({
+        "value": "ИП Иванов Иван Иванович",
+        "data": {"inn": "910200000000", "ogrn": "319910200000000", "type": "INDIVIDUAL", "state": {"status": "ACTIVE"},
+                 "name": {"short_with_opf": "ИП Иванов Иван Иванович"}, "address": {"value": "г Симферополь"}},
+    })
+    assert c.sole_trader and c.kpp is None and c.name == "ИП Иванов Иван Иванович" and c.manager is None
+
+
+async def test_registration_throttling(client):
+    for i in range(10):
+        await register(client, f"bot{i}@example.com", organization={"name": "ООО «Бот»", "inn": company_inn(8000 + i)})
+        client.cookies.clear()
+    assert (await client.post("/api/auth/register/code", json={"email": "bot10@example.com"})).status_code == 429
+
+
+async def test_signup_needs_the_code_sent_to_the_address(client, monkeypatch):
+    org = {"name": "ООО «Код»", "inn": company_inn(8100)}
+    body = {"email": "code@example.com", "password": "secret-123", "organization": org}
+    # no code was sent to the address
+    assert (await client.post("/api/auth/register", json={**body, "code": "123456"})).json()["detail"] == "Код устарел. Запросите новый."
+    code = await signup_code(client, "code@example.com")
+    # another code only after a while; a wrong one counts against the code
+    r = await client.post("/api/auth/register/code", json={"email": "code@example.com"})
+    assert r.status_code == 429 and "Retry-After" in r.headers
+    wrong = "000000" if code != "000000" else "111111"
+    r = await client.post("/api/auth/register", json={**body, "code": wrong})
+    assert r.status_code == 400 and "Осталось попыток: 4" in r.json()["detail"]
+    assert (await client.post("/api/auth/login", json={"email": "code@example.com", "password": "secret-123"})).status_code == 401
+    r = await client.post("/api/auth/register", json={**body, "code": code})
+    assert r.status_code == 201, r.text
+    client.cookies.clear()
+    # an address with an account: the same answer, a letter saying so and no code (the form does not tell whose
+    # addresses are registered, and nobody registers it again)
+    client.cookies.clear()
+    from conftest import OUTBOX
+
+    import app.api.auth as auth_api
+
+    monkeypatch.setattr(auth_api, "CODE_RESEND", timedelta(0))  # the pause after the code above is not tested here
+    sent = len(OUTBOX)
+    assert (await client.post("/api/auth/register/code", json={"email": "code@example.com"})).status_code == 200
+    assert len(OUTBOX) == sent + 1 and "уже есть" in OUTBOX[-1][2] and not re.search(r"\b\d{6}\b", OUTBOX[-1][2])
+    r = await client.post("/api/auth/register", json={**body, "code": "123456"})
+    assert r.status_code == 400
+
+
+async def test_code_attempts_run_out(client, monkeypatch):
+    import app.api.auth as auth_api
+
+    org = {"name": "ООО «Перебор»", "inn": company_inn(8200)}
+    code = await signup_code(client, "brute@example.com")
+    wrong = "000000" if code != "000000" else "111111"
+    for _ in range(auth_api.CODE_ATTEMPTS):
+        await client.post("/api/auth/register", json={"email": "brute@example.com", "code": wrong, "password": "secret-123", "organization": org})
+    # even the right code does not help now: brute force over a million codes is cut at a few tries
+    r = await client.post("/api/auth/register", json={"email": "brute@example.com", "code": code, "password": "secret-123", "organization": org})
+    assert r.status_code == 400 and "Запросите новый код" in r.json()["detail"]
+
+
+async def test_password_reset_with_a_code(client):
+    from conftest import OUTBOX
+
+    await register(client, "forgot@example.com", password="old-pass-123")
+    client.cookies.clear()
+    old_session = (await client.post("/api/auth/login", json={"email": "forgot@example.com", "password": "old-pass-123"})).json()
+
+    # an address without an account gets the same answer, and no letter
+    sent = len(OUTBOX)
+    r = await client.post("/api/auth/password/code", json={"email": "nobody@example.com"})
+    assert r.status_code == 200 and len(OUTBOX) == sent
+    assert (await client.post("/api/auth/password/code", json={"email": "nobody@example.com"})).status_code == 429  # the same pause
+
+    r = await client.post("/api/auth/password/code", json={"email": "Forgot@example.com"})
+    assert r.status_code == 200 and OUTBOX[-1][0] == "forgot@example.com" and "восстановления пароля" in OUTBOX[-1][2]
+    code = re.search(r"\b(\d{6})\b", OUTBOX[-1][2]).group(1)
+    wrong = "000000" if code != "000000" else "111111"
+    # the code is checked before the new password is asked for, and stays good for it
+    assert (await client.post("/api/auth/password/check", json={"email": "forgot@example.com", "code": wrong})).status_code == 400
+    assert (await client.post("/api/auth/password/check", json={"email": "forgot@example.com", "code": code})).status_code == 204
+    # a made-up code does not reset
+    assert (await client.post("/api/auth/password/reset", json={"email": "forgot@example.com", "code": "123456", "new_password": "x" * 8})).status_code == 400
+    r = await client.post("/api/auth/password/reset", json={"email": "forgot@example.com", "code": code, "new_password": "new-pass-456"})
+    assert r.status_code == 204
+    # used up; the old password and the old sessions are gone
+    r = await client.post("/api/auth/password/reset", json={"email": "forgot@example.com", "code": code, "new_password": "other-pass-789"})
+    assert r.status_code == 400
+    assert (await client.post("/api/auth/login", json={"email": "forgot@example.com", "password": "old-pass-123"})).status_code == 401
+    assert (await client.post("/api/auth/login", json={"email": "forgot@example.com", "password": "new-pass-456"})).status_code == 200
+    assert (await client.post("/api/auth/refresh", json={"refresh_token": old_session["refresh_token"]})).status_code == 401
+
+
+async def test_password_change_keeps_this_session(client):
+    from conftest import OUTBOX
+
+    mine = await register(client, "keep@example.com")  # this browser
+    other = (await client.post("/api/auth/login", json={"email": "keep@example.com", "password": "secret-123"})).json()  # another device
+    client.cookies.clear()
+    before = mine["refresh_token"]
+    assert (await client.post("/api/auth/password/code", json={"email": "keep@example.com"})).status_code == 200
+    code = re.search(r"\b(\d{6})\b", OUTBOX[-1][2]).group(1)
+    r = await client.post(
+        "/api/auth/password",
+        json={"code": code, "new_password": "secret-456"},
+        headers={"Authorization": f"Bearer {mine['access_token']}", "Cookie": f"refresh_token={before}"},
+    )
+    assert r.status_code == 200
+    after = r.json()["refresh_token"]
+    client.cookies.clear()
+    # a request of this page that still carried the old cookie: within the grace period, not a stolen token
+    assert (await client.post("/api/auth/refresh", json={"refresh_token": before})).status_code == 200
+    assert (await client.post("/api/auth/refresh", json={"refresh_token": after})).status_code == 200
+    # the other device is signed out
+    assert (await client.post("/api/auth/refresh", json={"refresh_token": other["refresh_token"]})).status_code == 401
+
+
+async def test_wrong_codes_of_a_day_are_limited(client, monkeypatch):
+    """Five tries per code and new codes each minute would let a guesser go on for ever: the wrong codes of an
+    address are capped per day over all its codes."""
+    import app.api.auth as auth_api
+
+    monkeypatch.setattr(auth_api, "CODE_RESEND", timedelta(0))
+    monkeypatch.setattr(auth_api, "CODES_PER_HOUR", 100)
+    await register(client, "guess@example.com")
+    client.cookies.clear()
+    for _ in range(auth_api.FAILS_PER_DAY // auth_api.CODE_ATTEMPTS):
+        assert (await client.post("/api/auth/password/code", json={"email": "guess@example.com"})).status_code == 200
+        for _ in range(auth_api.CODE_ATTEMPTS):
+            await client.post("/api/auth/password/check", json={"email": "guess@example.com", "code": "000000"})
+    assert (await client.post("/api/auth/password/code", json={"email": "guess@example.com"})).status_code == 200
+    r = await client.post("/api/auth/password/check", json={"email": "guess@example.com", "code": "000000"})
+    assert r.status_code == 429 and "завтра" in r.json()["detail"]
+
+
+async def test_codes_per_day_are_limited(client, monkeypatch):
+    import app.api.auth as auth_api
+
+    monkeypatch.setattr(auth_api, "CODE_RESEND", timedelta(0))
+    monkeypatch.setattr(auth_api, "CODES_PER_HOUR", 100)
+    for _ in range(auth_api.CODES_PER_DAY):
+        assert (await client.post("/api/auth/password/code", json={"email": "flood@example.com"})).status_code == 200
+        auth_api._failures.clear()  # the per-address limit of the client is not what is tested here
+    r = await client.post("/api/auth/password/code", json={"email": "flood@example.com"})
+    assert r.status_code == 429 and "завтра" in r.json()["detail"]
+
+
+async def test_no_codes_into_the_log_on_a_server(monkeypatch):
+    import app.mail as mail
+    from app.config import Settings
+
+    settings = Settings(APP_ENV="prod", JWT_SECRET="x" * 40, SMTP_HOST="")
+    monkeypatch.setattr(mail, "get_settings", lambda: settings)
+    with pytest.raises(mail.MailError):
+        await mail.send_mail("someone@example.com", "Код подтверждения: 123456", "123456")

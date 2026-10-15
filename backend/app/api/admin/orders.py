@@ -53,7 +53,7 @@ class OrderIn(BaseModel):
     discount: Decimal = Field(Decimal(0), ge=0)
     source: OrderSource = OrderSource.phone
     payment_method: PaymentMethod = PaymentMethod.cash
-    audience: Audience = Audience.retail  # with the payment method: the price type of the lines
+    audience: Audience = Audience.wholesale  # with the payment method: the price type of the lines
     items: list[OrderItemIn] = Field(min_length=1)
 
 

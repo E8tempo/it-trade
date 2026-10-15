@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
-from app.api.account import OrganizationIn, OrganizationOut
+from app.api.account import OrganizationIn, OrganizationOut, same_company
 from app.api.admin.common import Admin, Page, Session, like
 from app.api.admin.orders import OrderListItem, author_name, list_item
 from app.models import Contract, ContractTerms, MemberRole, Order, Organization, OrganizationMember, OrganizationStatus, User
@@ -59,8 +59,19 @@ class OrganizationPage(Page[OrganizationListItem]):
     counts: dict[str, int]  # organizations per status, for the filter tabs
 
 
+class SameCompany(BaseModel):
+    """Another organization of the same company (ИНН, and КПП unless one has none)."""
+
+    id: int
+    name: str
+    kpp: str | None
+    status: OrganizationStatus
+    owner: Person | None
+
+
 class AdminOrganization(OrganizationOut):
     members: list[Member]
+    same_company: list[SameCompany]  # other requests for this company: only one can be approved
     reviewed_at: datetime | None
     reviewed_by: str | None
     updated_at: datetime
@@ -130,14 +141,41 @@ async def _out(session: Session, org: Organization) -> AdminOrganization:
         .order_by(Order.id.desc())
         .limit(RECENT_ORDERS)
     )
+    others = (
+        await session.scalars(
+            select(Organization)
+            .where(same_company(org.inn, org.kpp), Organization.id != org.id)
+            .options(selectinload(Organization.members))
+            .order_by(Organization.id)
+        )
+    ).all()
+    heads = {o.id: next((m.user_id for m in o.members if m.role == MemberRole.owner), None) for o in others}
+    users |= await _users(session, {u for u in heads.values() if u is not None} - users.keys())
     return AdminOrganization(
         **OrganizationOut.of(org).model_dump(),
         members=[Member(**Person.of(users[m.user_id]).model_dump(), role=m.role, added_at=m.created_at) for m in org.members],
+        same_company=[
+            SameCompany(id=o.id, name=o.name, kpp=o.kpp, status=o.status, owner=Person.of(users[heads[o.id]]) if heads[o.id] in users else None)
+            for o in others
+        ],
         reviewed_at=org.reviewed_at,
         reviewed_by=org.reviewed_by,
         updated_at=org.updated_at,
         orders=[list_item(o) for o in orders],
     )
+
+
+async def _one_approved(session: Session, org: Organization) -> None:
+    """One approved organization per company: 409 naming the one there is."""
+    other = await session.scalar(
+        select(Organization).where(same_company(org.inn, org.kpp), Organization.status == OrganizationStatus.approved, Organization.id != org.id).limit(1)
+    )
+    if other is not None:
+        raise HTTPException(
+            409,
+            f"Эта компания уже работает с нами: «{other.name}» (№ {other.id}) подтверждена. "
+            "Отклоните эту заявку и добавьте человека в сотрудники той организации.",
+        )
 
 
 async def _contract(session: Session, contract_id: int) -> Contract:
@@ -220,6 +258,8 @@ async def edit_organization(org_id: int, body: OrganizationIn, session: Session)
     org = await _load(session, org_id)
     for k, v in body.model_dump().items():
         setattr(org, k, v)
+    if org.status == OrganizationStatus.approved:
+        await _one_approved(session, org)
     await session.commit()
     return await _reloaded(session, org_id)
 
@@ -228,6 +268,8 @@ async def edit_organization(org_id: int, body: OrganizationIn, session: Session)
 async def review_organization(org_id: int, body: ReviewIn, session: Session, admin: Admin):
     """Approves (wholesale prices for its customer), rejects with a reason, or returns it to the check."""
     org = await _load(session, org_id)
+    if body.status == OrganizationStatus.approved and org.status != OrganizationStatus.approved:
+        await _one_approved(session, org)
     org.status, org.review_note = body.status, body.note
     pending = body.status == OrganizationStatus.pending
     org.reviewed_at, org.reviewed_by = (None, None) if pending else (utcnow(), author_name(admin))

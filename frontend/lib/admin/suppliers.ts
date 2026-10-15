@@ -25,20 +25,26 @@ export function hasLoading(code: string): boolean {
 
 export type PriceTypeInfo = { value: PriceType; label: string; short: string; audience: Audience; payment: PaymentMethod };
 
-/** The 4 prices of a product, each computed by its own markup rules. */
-export const PRICE_TYPES: PriceTypeInfo[] = [
+/** The 4 prices of a product, each computed by its own markup rules. The backend still keeps the retail ones
+ * (sorting by price, a reference for later), but the shop sells wholesale only, so the admin panel shows and
+ * edits PRICE_TYPES; this full list only names the type of an older order. */
+const ALL_PRICE_TYPES: PriceTypeInfo[] = [
+  { value: "wholesale_cash", label: "Опт · наличные", short: "Наличные", audience: "wholesale", payment: "cash" },
+  { value: "wholesale_cashless", label: "Опт · безнал", short: "Безнал", audience: "wholesale", payment: "cashless" },
   { value: "retail_cash", label: "Розница · наличные", short: "Розн. нал", audience: "retail", payment: "cash" },
   { value: "retail_cashless", label: "Розница · безнал", short: "Розн. безнал", audience: "retail", payment: "cashless" },
-  { value: "wholesale_cash", label: "Опт · наличные", short: "Опт нал", audience: "wholesale", payment: "cash" },
-  { value: "wholesale_cashless", label: "Опт · безнал", short: "Опт безнал", audience: "wholesale", payment: "cashless" },
 ];
 
-export const PRICE_TYPE = Object.fromEntries(PRICE_TYPES.map((t) => [t.value, t])) as Record<PriceType, PriceTypeInfo>;
+/** The prices the shop sells at: wholesale, cash and cashless. */
+export const PRICE_TYPES = ALL_PRICE_TYPES.filter((t) => t.audience === "wholesale");
+
+export const PRICE_TYPE = Object.fromEntries(ALL_PRICE_TYPES.map((t) => [t.value, t])) as Record<PriceType, PriceTypeInfo>;
 
 export function priceType(audience: Audience, payment: PaymentMethod): PriceType {
   return `${audience}_${payment}`;
 }
 
+/** One of the types the admin panel edits (PRICE_TYPES). */
 export function isPriceType(v: unknown): v is PriceType {
-  return typeof v === "string" && v in PRICE_TYPE;
+  return PRICE_TYPES.some((t) => t.value === v);
 }

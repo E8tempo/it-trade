@@ -13,9 +13,9 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { apiErrorText } from "@/lib/admin/errors";
-import { AUDIENCE, contractTerms, day, DELIVERY, money, ORDER_STATUSES, PAYMENT, SOURCE, STATUS, when } from "@/lib/admin/labels";
+import { contractTerms, day, DELIVERY, money, ORDER_STATUSES, PAYMENT, SOURCE, STATUS, when } from "@/lib/admin/labels";
 import { PRICE_TYPE, priceType } from "@/lib/admin/suppliers";
-import type { Audience, Order, OrderStatus, PaymentMethod } from "@/lib/admin/types";
+import type { Order, OrderStatus, PaymentMethod } from "@/lib/admin/types";
 import { api } from "@/lib/api/client";
 import { productHref } from "@/lib/urls";
 
@@ -125,48 +125,29 @@ function StatusPanel({ order, busy, onSave }: { order: Order; busy: boolean; onS
 
 /** How the customer pays and whose prices apply. The lines keep the prices they were added with. */
 function PaymentPanel({ order, busy, onSave }: { order: Order; busy: boolean; onSave: SaveFn }) {
-  const audienceNow = PRICE_TYPE[order.price_type].audience;
+  const retail = PRICE_TYPE[order.price_type].audience === "retail"; // an order from before the shop went wholesale only
   const [payment, setPayment] = useState<PaymentMethod>(order.payment_method);
-  const [audience, setAudience] = useState<Audience>(audienceNow);
-  const changes = [
-    payment !== order.payment_method && `Оплата: ${PAYMENT[payment]}`,
-    audience !== audienceNow && `Цены: ${AUDIENCE[audience]}`,
-  ].filter(Boolean);
+  const changes = [payment !== order.payment_method && `Оплата: ${PAYMENT[payment]}`, retail && "Цены: опт"].filter(Boolean);
   return (
     <Panel title="Оплата и цены">
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Оплата">
-            <Select items={PAYMENT} value={payment} onValueChange={(v) => v && setPayment(v as PaymentMethod)}>
-              <SelectTrigger className="h-9 w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(PAYMENT).map(([k, label]) => (
-                  <SelectItem key={k} value={k}>
-                    {label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Цены">
-            <Select items={AUDIENCE} value={audience} onValueChange={(v) => v && setAudience(v as Audience)}>
-              <SelectTrigger className="h-9 w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(AUDIENCE).map(([k, label]) => (
-                  <SelectItem key={k} value={k}>
-                    {label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-        </div>
+        <Field label="Оплата">
+          <Select items={PAYMENT} value={payment} onValueChange={(v) => v && setPayment(v as PaymentMethod)}>
+            <SelectTrigger className="h-9 w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(PAYMENT).map(([k, label]) => (
+                <SelectItem key={k} value={k}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        {retail && <p className="text-xs text-amber-700">Заказ оформлен по розничным ценам. После сохранения новые товары пойдут по оптовым.</p>}
         <p className="text-xs text-muted-foreground">
-          Цены товаров, которые уже в заказе, не изменятся. Новые товары добавятся по цене «{PRICE_TYPE[priceType(audience, payment)].label}».
+          Цены товаров, которые уже в заказе, не изменятся. Новые товары добавятся по цене «{PRICE_TYPE[priceType("wholesale", payment)].label}».
         </p>
         <Button
           variant="outline"
@@ -175,7 +156,7 @@ function PaymentPanel({ order, busy, onSave }: { order: Order; busy: boolean; on
           onClick={() =>
             onSave(
               "payment",
-              { ...(payment !== order.payment_method && { payment_method: payment }), ...(audience !== audienceNow && { audience }) },
+              { ...(payment !== order.payment_method && { payment_method: payment }), ...(retail && { audience: "wholesale" }) },
               changes.join(", "),
             )
           }

@@ -7,7 +7,7 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from conftest import approve, client_of, company_inn, login, register, reset_db
+from conftest import signup_code, approve, client_of, company_inn, login, register, reset_db
 
 from app.api import account as account_api
 from app.api import orders as orders_api
@@ -88,7 +88,7 @@ def test_requisites_check_digits():
     assert not valid_ogrn("1027700132196") and not valid_ogrn("304500116000158") and not valid_ogrn("12345")
 
 
-async def test_registration_with_an_organization(browser):
+async def test_registration_with_an_organization(client, admin, browser):
     ivan = browser()
     user = (await register(ivan, "ivan@example.com", organization={**COMPANY, "inn": " 7707 083 893 ", "address": "  "}, name="Иван"))["user"]
     assert user["email"] == "ivan@example.com"
@@ -99,7 +99,7 @@ async def test_registration_with_an_organization(browser):
 
     # the organization is required and checked; nothing is created when it is refused
     other = browser()
-    base = {"email": "petr@example.com", "password": "secret-123"}
+    base = {"email": "petr@example.com", "password": "secret-123", "code": await signup_code(other, "petr@example.com")}
     cases = [
         ({}, None),
         ({"organization": {**fresh(), "inn": "7707083894"}}, "Контрольная цифра ИНН"),
@@ -114,25 +114,36 @@ async def test_registration_with_an_organization(browser):
     for fields, message in cases:
         r = await other.post("/api/auth/register", json={**base, **fields})
         assert r.status_code == 422 and (message is None or message in r.text), fields
-    # one record per company: the same ИНН and КПП, or a missing КПП, is refused
+    # Someone else's request for the same company is accepted while ivan's is not checked: whoever registers
+    # a company's ИНН first does not lock the company out. Only one of them can be approved.
+    squatter = browser()
+    await register(squatter, "squatter@example.com", organization=COMPANY)
+    (fake,) = await orgs_of(squatter)
+    detail = (await client.get(f"/api/admin/organizations/{org['id']}", headers=admin)).json()
+    assert [(o["id"], o["status"], o["owner"]["email"]) for o in detail["same_company"]] == [(fake["id"], "pending", "squatter@example.com")]
+    await review(client, admin, org["id"], "approved")
+    r = await client.post(f"/api/admin/organizations/{fake['id']}/review", json={"status": "approved"}, headers=admin)
+    assert r.status_code == 409 and f"№ {org['id']}" in r.json()["detail"]
+    await review(client, admin, fake["id"], "rejected", "Не ваша организация")
+    # the company is a client now: the same ИНН and КПП, or a missing КПП, is refused
     for org in (COMPANY, {**COMPANY, "kpp": None}, {"name": "Другое имя", "inn": "7707083893"}):
         r = await other.post("/api/auth/register", json={**base, "organization": org})
         assert r.status_code == 409 and r.json()["detail"] == account_api.ALREADY_REGISTERED
     assert (await other.post("/api/auth/login", json=base)).status_code == 401  # no user was created
     # a branch (the same ИНН, another КПП) is another client; a sole trader has no КПП
-    await register(other, "petr@example.com", organization={**COMPANY, "kpp": "773602002"})
+    await register(other, "petr@example.com", organization={**COMPANY, "kpp": "773602002"}, code=base["code"])
     trader = (await register(browser(), "trader@example.com", organization={**SOLE_TRADER, "kpp": "773601001"}))["user"]
     assert trader["email"] == "trader@example.com"
-    r = await other.post("/api/auth/register", json={"email": "ivan@example.com", "password": "secret-123", "organization": fresh()})
-    assert r.status_code == 409  # the e-mail
+    r = await other.post("/api/auth/register", json={"email": "ivan@example.com", "code": "000000", "password": "secret-123", "organization": fresh()})
+    assert r.status_code == 400  # the e-mail is registered: refused like a wrong code, not told
 
 
 async def test_client_manages_organizations(client, admin, browser):
     anna = browser()
     await register(anna, "anna@example.com", organization=fresh(name="ООО «Анна»"))
     (first,) = await orgs_of(anna)
-    r = await anna.post("/api/account/organizations", json={"name": "ИП Анна", "inn": "500100732259"})
-    assert r.status_code == 409  # registered by trader@ in the previous test
+    r = await anna.post("/api/account/organizations", json={"name": "Снова Анна", "inn": first["inn"], "kpp": first["kpp"]})
+    assert r.status_code == 409 and "уже есть в вашем кабинете" in r.json()["detail"]
     second = (await anna.post("/api/account/organizations", json=fresh(name="ООО «Второе»", kpp=None))).json()
     assert (second["status"], second["role"], second["kpp"]) == ("pending", "owner", None)
     assert [o["name"] for o in await orgs_of(anna)] == ["ООО «Анна»", "ООО «Второе»"]

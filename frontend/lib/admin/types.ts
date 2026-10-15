@@ -236,8 +236,30 @@ export type ImageSettings = {
   download_rps: number;
 };
 
+export type SyncSettings = {
+  stock_every_min: number;
+  catalog_every_hours: number; // divides 24: the slots fall on the same hours every day
+  catalog_hour: number; // local hour the catalog slots are counted from
+};
+
+/** The next run of a supplier sync, for the timers on the loading page. */
+export type SyncTimer = {
+  // due: its time has come; the worker takes it within half a minute, or after the sync it runs now (`busy`)
+  state: "scheduled" | "due" | "running" | "retry" | "waiting";
+  next_at: string | null;
+  last_success_at: string | null;
+  busy: string | null;
+};
+
 export type CheckStatus = "ok" | "warn" | "error" | "wait";
-export type LoadingCheck = { key: string; title: string; status: CheckStatus; detail: string; hint: string | null };
+export type LoadingCheck = {
+  key: string;
+  title: string;
+  status: CheckStatus;
+  detail: string;
+  hint: string | null;
+  action: "retry" | null; // "retry": the failed supplier syncs can be run again at once
+};
 
 export type StageStatus = "done" | "running" | "waiting" | "paused" | "error" | "off";
 export type LoadingStage = {
@@ -254,6 +276,8 @@ export type LoadingStage = {
   phase?: string | null; // what that sync is doing now
   last_success_at?: string | null;
   error?: string | null;
+  retry_at?: string | null; // a failed sync runs again at this time...
+  retry_requested?: boolean; // ...or within half a minute, when asked
 };
 
 export type TrialStatus = "queued" | "running" | "done" | "interrupted";
@@ -280,12 +304,15 @@ export type Loading = {
   generated_at: string;
   version: number;
   settings: ImageSettings;
+  sync: SyncSettings;
+  schedule: { stock: SyncTimer; catalog: SyncTimer };
   limits: { download_rps_max: number; supplier_rps: number; web_concurrency: number };
   worker: {
     alive: boolean;
     heartbeat: string | null;
     started_at: string | null;
     activity: "starting" | "photos" | "idle" | "paused" | "trial" | null;
+    outdated: boolean; // started before the backend code changed: restart it
     image_workers: number | null;
     cpus: number | null;
   };
@@ -369,6 +396,8 @@ export type AdminOrganization = OrganizationInput & {
   members: Member[];
   contracts: Contract[];
   orders: OrderListItem[]; // the latest ones placed for it
+  // other requests for the same company (ИНН, and КПП unless one has none): only one can be approved
+  same_company: { id: number; name: string; kpp: string | null; status: OrganizationStatus; owner: Person | null }[];
 };
 
 // --- news and promotions (backend/app/api/admin/posts.py) ----------------------------------------

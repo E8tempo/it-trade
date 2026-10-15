@@ -43,6 +43,17 @@ class Settings(BaseSettings):
     catalog_sample_per_category: int = 0  # at most N products per category
     catalog_sample_limit: int = 0  # at most N products in total, spread over the root categories
 
+    # Outgoing mail (codes that confirm an e-mail address). Without SMTP_HOST the letters go to the log: in
+    # development the code is in the API's output.
+    smtp_host: str = ""
+    smtp_port: int = 465  # 465: TLS from the start; 587: STARTTLS
+    smtp_user: str = ""
+    smtp_password: SecretStr = SecretStr("")
+    mail_from: str = ""  # "IT Trade <noreply@shop.example.ru>"; SMTP_USER if empty
+
+    # Requisites by ИНН in the registration form (app/companies.py); without a key they are typed by hand
+    dadata_api_key: SecretStr = SecretStr("")
+
     # Media
     media_root: Path = BASE_DIR / "data" / "media"
     media_url: str = "/media"
@@ -54,8 +65,6 @@ class Settings(BaseSettings):
     # API processes (uvicorn --workers, see the Dockerfile): they share the supplier's photo downloads
     # the worker leaves free, for photos opened on the site before the worker got to them
     web_concurrency: int = 2
-    stock_sync_interval_min: int = 30  # supplier limit: 10/hour
-    catalog_sync_hour: int = 5  # local hour, after the supplier's nightly update
     timezone: str = "Europe/Simferopol"
 
     @field_validator("jwt_secret", mode="before")

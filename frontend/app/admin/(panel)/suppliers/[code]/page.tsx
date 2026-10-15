@@ -5,7 +5,7 @@ import { Suspense } from "react";
 
 import { SupplierPricingEditor } from "@/components/admin/pricing/supplier-pricing-editor";
 import { Skeleton } from "@/components/ui/skeleton";
-import { isPriceType, supplierName } from "@/lib/admin/suppliers";
+import { isPriceType, PRICE_TYPES, supplierName } from "@/lib/admin/suppliers";
 import type { AdminCategory, AdminSupplier, PricePreview, PriceType, SupplierPricing } from "@/lib/admin/types";
 import { ApiError, apiServer } from "@/lib/api/server";
 import { countLabel, formatNumber } from "@/lib/format";
@@ -68,8 +68,8 @@ async function SupplierContent({ params, searchParams }: Props) {
     <>
       <p className="mb-6 max-w-3xl text-sm text-muted-foreground">
         В каталоге {countLabel(supplier.products)}, в наличии {formatNumber(supplier.in_stock)}. Цены на сайте считаются из закупочных
-        цен поставщика. У товара четыре цены — розница и опт, за наличные и по безналу, — и у каждой свои правила. Пересчёт идёт сразу
-        после сохранения и при каждом обновлении остатков. Подробно — в разделе{" "}
+        цен поставщика. Сайт продаёт оптом: у товара две цены — за наличные и по безналу, — и у каждой свои правила. Пересчёт идёт
+        сразу после сохранения и при каждом обновлении остатков. Подробно — в разделе{" "}
         <Link href="/admin/docs/pricing" className="text-primary hover:underline">
           «Как считается цена»
         </Link>
@@ -80,7 +80,7 @@ async function SupplierContent({ params, searchParams }: Props) {
         pricing={pricing}
         categories={categories}
         example={{ supplierPrice: EXAMPLE_SUPPLIER_PRICE, prices: example }}
-        initialType={isPriceType(type) ? type : "retail_cash"}
+        initialType={isPriceType(type) ? type : PRICE_TYPES[0].value}
       />
     </>
   );

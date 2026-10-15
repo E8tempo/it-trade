@@ -33,7 +33,7 @@ class AdminProduct(BaseModel):
     price: Money | None  # retail cash, the shop price
     prices: dict[PriceType, Money | None]
     price_overrides: dict[PriceType, Money]  # the types whose price is fixed by admin
-    markup_percent: float | None  # retail cash price / supplier price - 1, %
+    markup_percent: float | None  # wholesale cashless price (what most clients pay) / supplier price - 1, %
     in_stock: bool
     qty: int
     is_hidden: bool
@@ -67,7 +67,8 @@ class FailedImage(BaseModel):
 def _out(p: Product) -> AdminProduct:
     img = p.main_image
     show = img is not None and img.status in (ImageStatus.ready, ImageStatus.stale)
-    markup = float(p.price / p.supplier_price - 1) * 100 if p.price and p.supplier_price else None
+    sale = p.price_wholesale_cashless
+    markup = float(sale / p.supplier_price - 1) * 100 if sale and p.supplier_price else None
     return AdminProduct(
         sku=p.sku,
         name=p.name,
@@ -91,8 +92,9 @@ def _out(p: Product) -> AdminProduct:
 
 SORTS = {
     "name": (Product.name,),
-    "price": (Product.price.desc().nulls_last(),),
-    "markup": ((Product.price / Product.supplier_price).desc().nulls_last(),),
+    # the site sells wholesale only: by the wholesale cashless price
+    "price": (Product.price_wholesale_cashless.desc().nulls_last(),),
+    "markup": ((Product.price_wholesale_cashless / Product.supplier_price).desc().nulls_last(),),
     "new": (Product.sku.desc(),),
 }
 

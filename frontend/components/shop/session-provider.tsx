@@ -14,7 +14,7 @@ import {
 import { toast } from "sonner";
 
 import { errorMessage } from "@/components/shop/errors";
-import { api, ApiError } from "@/lib/api/client";
+import { api, ApiError, refreshTokens } from "@/lib/api/client";
 import type { AuthTokens, Cart, CartItem, Organization, OrganizationInput, PaymentMethod, User } from "@/lib/types";
 
 // The visitor's session, organizations and cart, shared by the header, the side panel, product
@@ -71,20 +71,23 @@ const serverPayment = (): PaymentMethod => "cash";
 
 // --- contexts --------------------------------------------------------------------------------
 
-export type RegisterData = { email: string; password: string; name: string | null; phone: string | null; organization: OrganizationInput };
+export type RegisterData = { email: string; code: string; password: string; name: string | null; phone: string | null; organization: OrganizationInput };
 export type CartLineInput = { sku: number; qty: number };
 
 type SessionValue = {
   user: User | null;
   /** until the first answer of /api/auth/me */
   loading: boolean;
+  /** the API said there is no session (401); not when it could not be reached */
+  signedOut: boolean;
   refresh: () => Promise<void>;
   login: (email: string, password: string) => Promise<User>;
   register: (data: RegisterData) => Promise<User>;
   /** Ends this session (or all of them) and reloads the page. */
   logout: (options?: { everywhere?: boolean }) => Promise<void>;
   saveProfile: (data: { name: string | null; phone: string | null }) => Promise<User>;
-  changePassword: (current: string, next: string) => Promise<void>;
+  /** a new password confirmed with the code sent to the user's e-mail (POST /api/auth/password/code) */
+  changePassword: (code: string, next: string) => Promise<void>;
   /** Call before a request made on the user's behalf; false if the session turned out to be over. */
   keepSession: () => Promise<boolean>;
   /** the user's organizations; null for a guest and until loaded */
@@ -137,6 +140,7 @@ const PRIVATE_PATH = /^\/(account|cart|checkout)(\/|$)/;
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [user, setUserState] = useState<User | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
+  const [signedOut, setSignedOut] = useState(false);
   // loaded for this user: after a sign-out or another sign-in they no longer apply
   const [orgs, setOrgs] = useState<{ userId: number; list: Organization[] } | null>(null);
   const organizations = orgs && orgs.userId === user?.id ? orgs.list : null;
@@ -156,9 +160,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   // --- session -------------------------------------------------------------------------------
 
+  // null only ever comes from a 401: the session is over
   const setUser = useCallback((u: User | null) => {
     userRef.current = u;
     setUserState(u);
+    setSignedOut(u === null);
   }, []);
 
   /** Fresh tokens: the access cookie lives `expires_in` from now (less a margin for the trip). */
@@ -176,20 +182,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // token's expiry is unknown (after a page load) or near; the refresh tells the new expiry.
   const keepSession = useCallback((): Promise<boolean> => {
     if (!userRef.current || Date.now() < tokenUntil.current) return Promise.resolve(true);
-    refreshing.current ??= api<AuthTokens>("/api/auth/refresh", { method: "POST" })
+    // the page's one refresh (lib/api/client.ts): shared with the 401 retries of other requests
+    refreshing.current ??= refreshTokens<AuthTokens>()
       .then(
         (t) => {
-          signedIn(t);
-          return true;
-        },
-        (e: unknown) => {
-          if (!(e instanceof ApiError && e.status === 401)) return true; // no connection: the request will tell
+          if (t) {
+            signedIn(t);
+            return true;
+          }
           // signed out elsewhere (another device, a password change): from now on a guest
           tokenUntil.current = 0;
           setUser(null);
           toast.info("Сеанс завершён. Войдите снова, чтобы вернуться к своей корзине и заказам.");
           return false;
         },
+        () => true, // no connection: the request will tell
       )
       .finally(() => {
         refreshing.current = null;
@@ -352,13 +359,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   );
 
   const changePassword = useCallback(
-    async (current: string, next: string) => {
+    async (code: string, next: string) => {
       await keepSession();
       // other sessions end; this one gets new tokens
       signedIn(
         await api<AuthTokens>("/api/auth/password", {
           method: "POST",
-          body: JSON.stringify({ current_password: current, new_password: next }),
+          body: JSON.stringify({ code, new_password: next }),
         }),
       );
     },
@@ -393,7 +400,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     api<User>("/api/auth/me")
       .then(
         (u) => alive && setUser(u),
-        () => undefined, // 401: a guest
+        (e: unknown) => alive && e instanceof ApiError && e.status === 401 && setSignedOut(true), // a guest
       )
       .finally(() => alive && setSessionLoading(false));
     return () => {
@@ -441,6 +448,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     () => ({
       user,
       loading: sessionLoading,
+      signedOut,
       refresh: refreshSession,
       login,
       register,
@@ -452,7 +460,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       refreshOrganizations,
       access,
     }),
-    [user, sessionLoading, refreshSession, login, register, logout, saveProfile, changePassword, keepSession, organizations, refreshOrganizations, access],
+    [user, sessionLoading, signedOut, refreshSession, login, register, logout, saveProfile, changePassword, keepSession, organizations, refreshOrganizations, access],
   );
 
   const cartValue = useMemo<CartValue>(

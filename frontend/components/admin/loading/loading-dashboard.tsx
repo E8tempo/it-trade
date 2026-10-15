@@ -1,15 +1,13 @@
 "use client";
 
-import { CirclePause, LoaderCircle, Play } from "lucide-react";
+import { CircleHelp, CirclePause, LoaderCircle, Play, Settings2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { OverallPanel } from "@/components/admin/loading/overall";
-import { Automations, Checks, FailedPanel, QualityPanel, Stages } from "@/components/admin/loading/sections";
-import { LoadingSettings } from "@/components/admin/loading/settings-panel";
+import { AutomationsDialog, Checks, ProblemPhotos, Stages } from "@/components/admin/loading/sections";
+import { LoadingSettingsDialog } from "@/components/admin/loading/settings-panel";
 import { TrialPanel } from "@/components/admin/loading/trial-panel";
-import { RequeuePanel } from "@/components/admin/settings-forms";
-import { Panel } from "@/components/admin/ui";
 import { Button } from "@/components/ui/button";
 import { apiErrorText } from "@/lib/admin/errors";
 import type { Loading } from "@/lib/admin/types";
@@ -48,6 +46,7 @@ function useLoading(initial: Loading) {
 export function LoadingDashboard({ initial }: { initial: Loading }) {
   const { data, offline, refresh } = useLoading(initial);
   const [busy, setBusy] = useState(false);
+  const [dialog, setDialog] = useState<"settings" | "automations" | null>(null);
   const { settings } = data;
   const started = data.overview.photos_done > 0;
 
@@ -64,18 +63,45 @@ export function LoadingDashboard({ initial }: { initial: Loading }) {
     }
   }
 
+  async function retrySyncs() {
+    try {
+      const { queued } = await api<{ queued: number }>("/api/admin/loading/retry", { method: "POST" });
+      toast.success(queued ? "Воркер повторит обмен в течение 30 секунд" : "Повторять нечего: обмен уже идёт или прошёл");
+      await refresh();
+    } catch (e) {
+      toast.error(apiErrorText(e));
+    }
+  }
+
   return (
     <>
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <p className="max-w-3xl text-sm text-muted-foreground">
-          Товары, цены и фото от поставщика: что готово, что идёт сейчас и когда закончится. Страница обновляется сама каждые 5
-          секунд.
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+        <p className="max-w-2xl text-sm text-muted-foreground">
+          Товары, цены и фото от поставщика: что готово, что идёт сейчас и когда закончится. Обновляется само каждые 5 секунд.
         </p>
-        <Button onClick={togglePause} disabled={busy} variant={settings.paused ? "default" : "outline"}>
-          {busy ? <LoaderCircle className="animate-spin" /> : settings.paused ? <Play /> : <CirclePause />}
-          {settings.paused ? (started ? "Продолжить загрузку фото" : "Начать загрузку фото") : "Пауза фото"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="ghost" onClick={() => setDialog("automations")}>
+            <CircleHelp />
+            Что происходит само
+          </Button>
+          <Button variant="outline" onClick={() => setDialog("settings")}>
+            <Settings2 />
+            Настройки
+          </Button>
+          <Button onClick={togglePause} disabled={busy} variant={settings.paused ? "default" : "outline"}>
+            {busy ? <LoaderCircle className="animate-spin" /> : settings.paused ? <Play /> : <CirclePause />}
+            {settings.paused ? (started ? "Продолжить загрузку фото" : "Начать загрузку фото") : "Пауза фото"}
+          </Button>
+        </div>
       </div>
+      <LoadingSettingsDialog data={data} onChange={refresh} open={dialog === "settings"} onOpenChange={(o) => setDialog(o ? "settings" : null)} />
+      <AutomationsDialog
+        perProduct={settings.per_product}
+        version={data.version}
+        sync={data.sync}
+        open={dialog === "automations"}
+        onOpenChange={(o) => setDialog(o ? "automations" : null)}
+      />
       {offline && <p className="mb-4 text-sm text-destructive">Нет связи с API — показаны последние полученные данные.</p>}
       {settings.paused && !started && (
         <div className="mb-4 rounded-xl bg-primary/5 px-4 py-3 text-sm ring-1 ring-primary/15">
@@ -91,23 +117,12 @@ export function LoadingDashboard({ initial }: { initial: Loading }) {
 
       <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div className="min-w-0 space-y-6">
-          <Panel title="Этапы">
-            <Stages stages={data.stages} />
-          </Panel>
+          <Stages stages={data.stages} />
           <TrialPanel data={data} onChange={refresh} />
-          <QualityPanel quality={data.quality} />
         </div>
         <div className="min-w-0 space-y-6">
-          <Checks checks={data.checks} />
-          {/* a fresh form when the saved settings change (the pause is not part of the form) */}
-          <LoadingSettings
-            key={[settings.per_product, settings.download_rps, settings.gallery, settings.reprocess].join()}
-            data={data}
-            onChange={refresh}
-          />
-          <FailedPanel failed={data.failed} onChange={refresh} />
-          <RequeuePanel />
-          <Automations perProduct={settings.per_product} version={data.version} />
+          <Checks checks={data.checks} onRetry={retrySyncs} />
+          <ProblemPhotos data={data} onChange={refresh} />
         </div>
       </div>
     </>

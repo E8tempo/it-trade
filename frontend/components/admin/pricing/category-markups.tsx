@@ -21,6 +21,49 @@ function buildTree(categories: AdminCategory[]): Node[] {
   return roots;
 }
 
+function categoryPath(c: AdminCategory, byId: Map<number, AdminCategory>): AdminCategory[] {
+  const out: AdminCategory[] = [];
+  for (let cur: AdminCategory | undefined = c; cur; cur = cur.parent_id != null ? byId.get(cur.parent_id) : undefined) out.unshift(cur);
+  return out;
+}
+
+/** The categories with their own markup, each with a button that removes it; nothing when there are none. */
+export function CategoryMarkupChips({
+  categories,
+  value,
+  onChange,
+}: {
+  categories: AdminCategory[];
+  value: Record<string, number>;
+  onChange: (v: Record<string, number>) => void;
+}) {
+  const byId = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
+  const overrides = Object.keys(value)
+    .map((id) => byId.get(Number(id)))
+    .filter((c): c is AdminCategory => !!c);
+  if (!overrides.length) return null;
+  const remove = (id: number) => {
+    const next = { ...value };
+    delete next[id];
+    onChange(next);
+  };
+  return (
+    <div className="flex flex-wrap gap-2">
+      {overrides.map((c) => (
+        <span key={c.id} className="inline-flex items-center gap-1 rounded-full bg-primary/10 py-0.5 pr-1 pl-2.5 text-sm text-primary">
+          {categoryPath(c, byId)
+            .map((p) => p.name)
+            .join(" › ")}
+          : {value[c.id]}%
+          <Button type="button" variant="ghost" size="icon-xs" className="rounded-full" onClick={() => remove(c.id)} aria-label="Убрать">
+            <X />
+          </Button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /**
  * Markup per category. A category without its own value inherits the nearest parent's one,
  * and the default markup applies where no parent has one (the same rule as the backend).
@@ -47,11 +90,7 @@ export function CategoryMarkups({
     else next[id] = Number(v);
     onChange(next);
   };
-  const path = (c: AdminCategory): AdminCategory[] => {
-    const out: AdminCategory[] = [];
-    for (let cur: AdminCategory | undefined = c; cur; cur = cur.parent_id != null ? byId.get(cur.parent_id) : undefined) out.unshift(cur);
-    return out;
-  };
+  const path = (c: AdminCategory) => categoryPath(c, byId);
   const inherited = (c: AdminCategory) => {
     for (const p of path(c).slice(0, -1).reverse()) if (value[p.id] != null) return { pct: value[p.id], from: p.name };
     return { pct: fallback, from: null };
@@ -59,10 +98,6 @@ export function CategoryMarkups({
 
   const q = query.trim().toLowerCase();
   const matches = q ? categories.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 50) : [];
-  const overrides = Object.keys(value)
-    .map((id) => byId.get(Number(id)))
-    .filter((c): c is AdminCategory => !!c);
-
   const row = (c: AdminCategory, depth: number, hasChildren: boolean, label?: string) => {
     const own = value[c.id];
     const inh = inherited(c);
@@ -113,21 +148,7 @@ export function CategoryMarkups({
 
   return (
     <div className="space-y-4">
-      {overrides.length > 0 && (
-        <div>
-          <p className="mb-2 text-sm text-muted-foreground">Свои наценки заданы для:</p>
-          <div className="flex flex-wrap gap-2">
-            {overrides.map((c) => (
-              <span key={c.id} className="inline-flex items-center gap-1 rounded-full bg-primary/10 py-0.5 pr-1 pl-2.5 text-sm text-primary">
-                {path(c).map((p) => p.name).join(" › ")}: {value[c.id]}%
-                <Button type="button" variant="ghost" size="icon-xs" className="rounded-full" onClick={() => set(c.id, "")} aria-label="Убрать">
-                  <X />
-                </Button>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
+      <CategoryMarkupChips categories={categories} value={value} onChange={onChange} />
       <div className="relative">
         <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Найти категорию" className="h-9 pl-9" />

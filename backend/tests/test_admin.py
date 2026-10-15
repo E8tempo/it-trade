@@ -109,7 +109,7 @@ async def test_order_lifecycle(admin):
     assert r.status_code == 201, r.text
     o = r.json()
     assert o["number"] == f"{o['id']:06d}" and o["status"] == "new" and o["phone"] == "+79781234567"
-    assert (o["payment_method"], o["price_type"], o["user_id"]) == ("cash", "retail_cash", None)
+    assert (o["payment_method"], o["price_type"], o["user_id"]) == ("cash", "wholesale_cash", None)  # the shop sells wholesale only
     price10 = float(o["items"][0]["price"])
     assert float(o["items_total"]) == price10 * 2 + 990 and float(o["total"]) == price10 * 2 + 990 + 300
     assert len(o["events"]) == 1

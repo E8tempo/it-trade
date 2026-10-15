@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, ExternalLink, LoaderCircle, Pencil, Plus, Trash2, Undo2, X } from "lucide-react";
+import { Check, ExternalLink, LoaderCircle, Pencil, Plus, Trash2, TriangleAlert, Undo2, X } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -185,6 +186,28 @@ function ReviewPanel({ org, busy, run }: { org: AdminOrganization; busy: boolean
           </p>
         )}
         {org.status === "rejected" && org.review_note && <p className="rounded-lg bg-red-500/8 px-3 py-2">Причина: {org.review_note}</p>}
+        {org.same_company.length > 0 && (
+          <div className="rounded-lg bg-amber-500/10 px-3 py-2.5 text-amber-900 ring-1 ring-amber-500/25">
+            <p className="flex items-center gap-1.5 font-medium">
+              <TriangleAlert className="size-4 shrink-0" />
+              Ещё {org.same_company.length === 1 ? "одна заявка" : `заявки (${org.same_company.length})`} с этим ИНН
+            </p>
+            <p className="mt-0.5 text-xs opacity-80">
+              Подтвердить можно только одну организацию компании — ту, чей руководитель настоящий. Остальные отклоните.
+            </p>
+            <ul className="mt-2 space-y-1">
+              {org.same_company.map((o) => (
+                <li key={o.id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <Link href={`/admin/organizations/${o.id}`} className="font-medium underline-offset-2 hover:underline">
+                    {o.name}
+                  </Link>
+                  <OrgStatusBadge status={o.status} />
+                  {o.owner && <span className="text-xs opacity-80">{o.owner.name || o.owner.email}</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <a href="https://egrul.nalog.ru/" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-primary hover:underline">
           Проверить в ЕГРЮЛ ФНС
           <ExternalLink className="size-3.5" />
