@@ -1,6 +1,6 @@
 "use client";
 
-import { Building2, CircleAlert, CircleCheckBig, FileText, LoaderCircle, Package, Store, Truck } from "lucide-react";
+import { Building2, CircleAlert, CircleCheckBig, FileText, LoaderCircle, Package, Store, Truck, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useLayoutEffect, useState, type FormEvent, type ReactNode } from "react";
@@ -11,7 +11,7 @@ import { lineTotal } from "@/components/shop/cart-view";
 import { ChoiceCard, PaymentChoice } from "@/components/shop/choice-card";
 import { errorMessage, hasStatus } from "@/components/shop/errors";
 import { describedBy, emailError, Field, FIELD, FormError, phoneError, type FieldErrors } from "@/components/shop/form";
-import { contractTerms, DELIVERY, PROBLEM } from "@/components/shop/labels";
+import { buyerFor, contractTerms, DELIVERY, fullName, PROBLEM } from "@/components/shop/labels";
 import { useCart, useSession } from "@/components/shop/session-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,8 +23,9 @@ import type { Cart, CheckoutIn, Contract, CustomerOrder, DeliveryMethod, Organiz
 import { cn } from "@/lib/utils";
 
 /**
- * The checkout: who buys (a customer with organizations), contacts, delivery, payment and a comment,
- * with the order on the side. `pickup` is the shop's address (rendered on the server), shown under «Самовывоз».
+ * The checkout: who buys (an organization of the client's or the client as a private person), contacts, delivery,
+ * payment and a comment, with the order on the side. `pickup` is the shop's address (rendered on the server), shown
+ * under «Самовывоз».
  */
 export function CheckoutView({ pickup }: { pickup: ReactNode }) {
   const router = useRouter();
@@ -33,12 +34,11 @@ export function CheckoutView({ pickup }: { pickup: ReactNode }) {
   const [placed, setPlaced] = useState(false);
   const empty = access === "client" && !cartLoading && !cart?.items.length;
 
-  // Only a client orders: a guest signs in first, a client waiting for the check sees its status.
-  // Nothing to order (an empty cart, also after a 409 «Корзина пуста»): back to the cart. Not
-  // after this page placed the order and emptied the cart, while it moves on to the order.
+  // Only a client orders: a guest signs in first. Nothing to order (an empty cart, also after a
+  // 409 «Корзина пуста»): back to the cart. Not after this page placed the order and emptied the
+  // cart, while it moves on to the order.
   useEffect(() => {
     if (access === "guest") router.replace("/login?next=%2Fcheckout");
-    else if (access === "pending") router.replace("/account/organizations");
     else if (empty && !placed) router.replace("/cart");
   }, [access, empty, placed, router]);
 
@@ -55,7 +55,7 @@ type CheckoutField = "name" | "phone" | "email" | "city" | "address" | "comment"
 const FIELDS: CheckoutField[] = ["name", "phone", "email", "city", "address", "comment"];
 
 function initialValues(user: User | null): Values {
-  return { name: user?.name ?? "", phone: user?.phone ?? "", email: user?.email ?? "", delivery: "pickup", city: "", address: "", comment: "" };
+  return { name: (user && fullName(user)) ?? "", phone: user?.phone ?? "", email: user?.email ?? "", delivery: "pickup", city: "", address: "", comment: "" };
 }
 
 function validate(v: Values): FieldErrors<CheckoutField> {
@@ -175,28 +175,30 @@ function CheckoutForm({ cart, pickup, onPlaced }: { cart: Cart; pickup: ReactNod
     <form noValidate onSubmit={onSubmit} className="grid grid-cols-1 gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_23rem] xl:grid-cols-[minmax(0,1fr)_25rem]">
       <div className="min-w-0 space-y-9">
         {!!buyers?.length && (
-          <Section step={++step} title="Организация">
+          <Section step={++step} title="Покупатель">
             <fieldset disabled={submitting}>
-              <BuyerChoice organizations={buyers} cart={cart} onChange={setBuyer} />
+              <BuyerChoice organizations={buyers} cart={cart} person={user} onChange={setBuyer} />
             </fieldset>
-            <div className="mt-5">
-              <h3 className="mb-2.5 text-sm font-medium">Договор</h3>
-              {contracts.length ? (
-                <fieldset disabled={submitting}>
-                  <ContractChoice contracts={contracts} value={contractId} onChange={setContract} />
-                </fieldset>
-              ) : (
-                <p className="rounded-2xl bg-muted/60 px-4 py-3 text-sm text-muted-foreground">
-                  Договора с нами у организации пока нет — менеджер свяжется с вами и оформит его.
-                </p>
-              )}
-            </div>
+            {cart.organization && (
+              <div className="mt-5">
+                <h3 className="mb-2.5 text-sm font-medium">Договор</h3>
+                {contracts.length ? (
+                  <fieldset disabled={submitting}>
+                    <ContractChoice contracts={contracts} value={contractId} onChange={setContract} />
+                  </fieldset>
+                ) : (
+                  <p className="rounded-2xl bg-muted/60 px-4 py-3 text-sm text-muted-foreground">
+                    Договора с нами у организации пока нет — менеджер свяжется с вами и оформит его.
+                  </p>
+                )}
+              </div>
+            )}
           </Section>
         )}
 
         <Section step={++step} title="Контактные данные">
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field id="co-name" label="Имя" error={errors.name}>
+            <Field id="co-name" label="Имя и фамилия" error={errors.name}>
               <Input
                 name="name"
                 autoComplete="name"
@@ -294,7 +296,7 @@ function CheckoutForm({ cart, pickup, onPlaced }: { cart: Cart; pickup: ReactNod
 
         <Section step={++step} title="Оплата">
           <fieldset disabled={submitting}>
-            <PaymentChoice value={payment} onChange={setPayment} totals={cart.totals} />
+            <PaymentChoice value={payment} onChange={setPayment} totals={cart.totals} person={!cart.organization} />
           </fieldset>
         </Section>
 
@@ -343,26 +345,50 @@ function CheckoutForm({ cart, pickup, onPlaced }: { cart: Cart; pickup: ReactNod
   );
 }
 
-/** The approved organization the order is for (the one chosen in the side panel); prices follow it. */
-function BuyerChoice({ organizations, cart, onChange }: { organizations: Organization[]; cart: Cart; onChange: (organizationId: number) => Promise<Cart> }) {
+const PERSON = "person";
+
+/** Who the order is for (the choice of the site header): an approved organization or the client as a private
+ * person; prices follow it. */
+function BuyerChoice({
+  organizations,
+  cart,
+  person,
+  onChange,
+}: {
+  organizations: Organization[];
+  cart: Cart;
+  person: User | null;
+  onChange: (organizationId: number | null) => Promise<Cart>;
+}) {
   const name = useId();
   const pick = (value: string) => {
-    onChange(Number(value)).catch((e: unknown) => toast.error(errorMessage(e, "Не удалось сменить организацию. Попробуйте ещё раз.")));
+    onChange(value === PERSON ? null : Number(value)).catch((e: unknown) =>
+      toast.error(errorMessage(e, "Не удалось сменить покупателя. Попробуйте ещё раз.")),
+    );
   };
   return (
-    <div role="radiogroup" aria-label="Организация" className="grid gap-2">
+    <div role="radiogroup" aria-label="Покупатель" className="grid gap-2">
       {organizations.map((o) => (
         <ChoiceCard
           key={o.id}
           name={name}
           value={String(o.id)}
-          checked={cart.organization.id === o.id}
+          checked={cart.organization?.id === o.id}
           onSelect={pick}
           icon={<Building2 className="size-4 text-muted-foreground" />}
           title={o.name}
           hint={`ИНН ${o.inn}${o.kpp ? ` · КПП ${o.kpp}` : ""}`}
         />
       ))}
+      <ChoiceCard
+        name={name}
+        value={PERSON}
+        checked={!cart.organization}
+        onSelect={pick}
+        icon={<UserRound className="size-4 text-muted-foreground" />}
+        title="Физическое лицо"
+        hint={(person && fullName(person)) ?? "Без организации, по ценам для физ. лиц"}
+      />
     </div>
   );
 }
@@ -423,8 +449,8 @@ function OrderSummary({
         </Link>
       </div>
       <p className="-mt-2 flex items-center gap-1.5 text-[13px] text-muted-foreground">
-        <Building2 className="size-3.5 shrink-0" />
-        <span className="truncate">Цены для {cart.organization.name}</span>
+        {cart.organization ? <Building2 className="size-3.5 shrink-0" /> : <UserRound className="size-3.5 shrink-0" />}
+        <span className="truncate">Цены для {buyerFor(cart)}</span>
       </p>
       <ul className="-mr-2 max-h-[min(22rem,45vh)] space-y-3 overflow-y-auto pr-2">
         {cart.items.map((item) => (

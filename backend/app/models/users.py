@@ -18,11 +18,17 @@ class User(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(254), unique=True)  # stored lower-cased
     password_hash: Mapped[str] = mapped_column(String(255))
-    name: Mapped[str | None] = mapped_column(String(255))
+    name: Mapped[str | None] = mapped_column(String(255))  # the first name (a full one for accounts made before last_name)
+    last_name: Mapped[str | None] = mapped_column(String(255))
     phone: Mapped[str | None] = mapped_column(String(32))
     role: Mapped[UserRole] = mapped_column(String(16), default=UserRole.customer)
     is_active: Mapped[bool] = mapped_column(default=True)
     last_login_at: Mapped[datetime | None]
+
+    @property
+    def full_name(self) -> str | None:
+        """«Иван Иванов»; None while neither is known."""
+        return " ".join(x for x in (self.name, self.last_name) if x) or None
 
 
 class RefreshToken(Base):

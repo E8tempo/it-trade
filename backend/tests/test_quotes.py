@@ -10,6 +10,7 @@ import pytest
 from conftest import approve, client_of, register, reset_db
 from sqlalchemy import select, update
 
+from app.api import quotes as quotes_api
 from app.api.auth import _failures
 from app.db import SessionLocal
 from app.models import Category, OrganizationMember, Product, User
@@ -86,9 +87,10 @@ def line(q: dict, sku: int | None = None, name: str | None = None) -> dict:
 async def test_only_for_an_approved_organization(client):
     assert (await client.post("/api/quotes", json={})).status_code == 401
     async with httpx.AsyncClient(transport=client._transport, base_url="http://test") as c:
+        # a private person (the organization is not checked yet) makes none
         await register(c, "pending-quotes@example.com")
         r = await c.post("/api/quotes", json={})
-        assert r.status_code == 403
+        assert r.status_code == 409 and r.json()["detail"] == quotes_api.NO_ORGANIZATION
         assert (await c.get("/api/quotes")).json()["total"] == 0
 
 

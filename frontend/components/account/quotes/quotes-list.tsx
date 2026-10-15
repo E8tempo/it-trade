@@ -12,10 +12,11 @@ import { quoteName } from "@/components/account/quotes/labels";
 import { ProfileDialog } from "@/components/account/quotes/profile-dialog";
 import { errorMessage } from "@/components/shop/errors";
 import { useCart, useSession } from "@/components/shop/session-provider";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
 import { countLabel, formatDate, formatMoney } from "@/lib/format";
 import type { Quote, QuoteListItem, QuotePage } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 const PER_PAGE = 20;
 
@@ -40,9 +41,10 @@ export function useNewQuote() {
   return { busy, create };
 }
 
-/** The offers the client made for their customers, the last changed first. */
+/** The offers the client made for their customers, the last changed first. Offers are an organization's: a client
+ * buying as a private person sees the ones made before and is told how to make new ones. */
 export function QuotesList() {
-  const { keepSession, access } = useSession();
+  const { keepSession, organizations } = useSession();
   const { cart } = useCart();
   const { busy, create } = useNewQuote();
   const [result, setResult] = useState<{ page: QuotePage; items: QuoteListItem[] } | null>(null);
@@ -67,16 +69,6 @@ export function QuotesList() {
     };
   }, [fetchPage, attempt]);
 
-  if (access === "pending") {
-    return (
-      <div className="max-w-4xl">
-        <PageHeading title="КП для клиентов" />
-        <p className="rounded-3xl bg-muted/50 px-5 py-10 text-center text-sm text-muted-foreground">
-          КП откроются, когда менеджер подтвердит вашу организацию: в них нужны цены.
-        </p>
-      </div>
-    );
-  }
   if (error && !result) {
     return (
       <LoadError
@@ -92,30 +84,52 @@ export function QuotesList() {
 
   const cartLines = cart?.items.length ?? 0;
   const more = result.items.length < result.page.total;
+  const person = !!cart && !cart.organization;
+  const approved = organizations?.some((o) => o.status === "approved");
   return (
     <div className="max-w-4xl">
       <PageHeading
         title="КП для клиентов"
         lead="Коммерческие предложения вашим заказчикам: наши товары с вашей наценкой, ваши реквизиты и контакты. Наших цен и названия в КП нет."
         action={
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" className="h-10 gap-2 rounded-xl px-3.5" onClick={() => setProfile(true)}>
-              <Settings2 />
-              Реквизиты для КП
-            </Button>
-            {cartLines > 0 && (
-              <Button variant="outline" className="h-10 gap-2 rounded-xl px-3.5" disabled={busy !== null} onClick={() => create(true)}>
-                {busy === "cart" ? <LoaderCircle className="animate-spin" /> : <ShoppingCart />}
-                Из корзины
+          !person && (
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" className="h-10 gap-2 rounded-xl px-3.5" onClick={() => setProfile(true)}>
+                <Settings2 />
+                Реквизиты для КП
               </Button>
-            )}
-            <Button className="h-10 gap-2 rounded-xl px-4" disabled={busy !== null} onClick={() => create(false)}>
-              {busy === "empty" ? <LoaderCircle className="animate-spin" /> : <Plus />}
-              Новое КП
-            </Button>
-          </div>
+              {cartLines > 0 && (
+                <Button variant="outline" className="h-10 gap-2 rounded-xl px-3.5" disabled={busy !== null} onClick={() => create(true)}>
+                  {busy === "cart" ? <LoaderCircle className="animate-spin" /> : <ShoppingCart />}
+                  Из корзины
+                </Button>
+              )}
+              <Button className="h-10 gap-2 rounded-xl px-4" disabled={busy !== null} onClick={() => create(false)}>
+                {busy === "empty" ? <LoaderCircle className="animate-spin" /> : <Plus />}
+                Новое КП
+              </Button>
+            </div>
+          )
         }
       />
+      {person && (
+        <div className="mb-6 flex flex-col gap-3 rounded-3xl bg-primary/[0.06] p-5 text-sm sm:flex-row sm:items-center sm:justify-between">
+          <p>
+            <span className="font-medium">КП составляется от организации</span> — с её реквизитами и по её оптовым ценам.{" "}
+            {approved
+              ? "Сейчас вы покупаете как физическое лицо: выберите организацию в шапке сайта."
+              : organizations?.length
+                ? "Ваша организация ещё на проверке."
+                : "Добавьте организацию — после проверки КП станут доступны."}
+          </p>
+          {!organizations?.length && (
+            <Link href="/account/organizations?add=1" className={cn(buttonVariants(), "h-10 shrink-0 gap-2 rounded-xl px-4")}>
+              <Plus />
+              Добавить организацию
+            </Link>
+          )}
+        </div>
+      )}
       {result.items.length ? (
         <>
           <ul className="space-y-2">
@@ -144,7 +158,7 @@ export function QuotesList() {
           )}
         </>
       ) : (
-        <NoQuotes />
+        !person && <NoQuotes />
       )}
       <ProfileDialog open={profile} onOpenChange={setProfile} />
     </div>

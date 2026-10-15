@@ -9,7 +9,7 @@ import { PageHeading } from "@/components/account/account-shell";
 import { ACCOUNT_CARD, CARD_HEAD, CardRow, Pill } from "@/components/account/ui";
 import { errorMessage } from "@/components/shop/errors";
 import { describedBy, Field, FIELD, FormError, phoneError, type FieldErrors } from "@/components/shop/form";
-import { ORG_STATUS } from "@/components/shop/labels";
+import { fullName, ORG_STATUS } from "@/components/shop/labels";
 import { ResetPasswordDialog } from "@/components/shop/reset-password";
 import { useSession } from "@/components/shop/session-provider";
 import { Button } from "@/components/ui/button";
@@ -45,10 +45,10 @@ function ContactsCard() {
       <CardHeader className={CARD_HEAD}>
         <div className="flex min-w-0 items-center gap-4">
           <span className="grid size-14 shrink-0 place-items-center rounded-2xl bg-primary/10 text-lg font-semibold text-primary">
-            {initials(user.name, user.email)}
+            {initials(fullName(user), user.email)}
           </span>
           <div className="min-w-0">
-            <CardTitle className="truncate text-lg font-semibold">{user.name || "Без имени"}</CardTitle>
+            <CardTitle className="truncate text-lg font-semibold">{fullName(user) || "Без имени"}</CardTitle>
             <CardDescription className="truncate">{user.email}</CardDescription>
           </div>
         </div>
@@ -60,8 +60,8 @@ function ContactsCard() {
         </CardAction>
       </CardHeader>
       <CardContent>
-        <CardRow icon={UserRound} label="Имя">
-          {user.name || <span className="font-normal text-muted-foreground">не указано</span>}
+        <CardRow icon={UserRound} label="Имя и фамилия">
+          {fullName(user) || <span className="font-normal text-muted-foreground">не указаны</span>}
         </CardRow>
         <CardRow icon={Phone} label="Телефон">
           {user.phone || <span className="font-normal text-muted-foreground">не указан — менеджеру будет сложнее связаться с вами</span>}
@@ -78,7 +78,7 @@ function ContactsCard() {
 
 function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { user, saveProfile } = useSession();
-  const [errors, setErrors] = useState<FieldErrors<"name" | "phone">>({});
+  const [errors, setErrors] = useState<FieldErrors<"name" | "last_name" | "phone">>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -86,14 +86,19 @@ function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
     e.preventDefault();
     const data = new FormData(e.currentTarget);
     const name = String(data.get("name") ?? "").trim();
+    const lastName = String(data.get("last_name") ?? "").trim();
     const phone = String(data.get("phone") ?? "").trim();
-    const found = { name: name.length > 255 ? "Слишком длинное имя" : undefined, phone: phoneError(phone, false) };
+    const found = {
+      name: name.length > 255 ? "Слишком длинное имя" : undefined,
+      last_name: lastName.length > 255 ? "Слишком длинная фамилия" : undefined,
+      phone: phoneError(phone, false),
+    };
     setErrors(found);
     setFormError(null);
-    if (found.name || found.phone) return;
+    if (found.name || found.last_name || found.phone) return;
     setSaving(true);
     try {
-      await saveProfile({ name: name || null, phone: phone || null });
+      await saveProfile({ name: name || null, last_name: lastName || null, phone: phone || null });
       toast.success("Контакты сохранены");
       onOpenChange(false);
     } catch (err) {
@@ -116,11 +121,11 @@ function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
           <DialogTitle className="text-lg font-semibold">Контакты</DialogTitle>
           <DialogDescription>Подставляются при оформлении заказа; по телефону менеджер подтверждает заказы.</DialogDescription>
         </DialogHeader>
-        <form id="profile-form" noValidate onSubmit={onSubmit} className="space-y-4">
+        <form id="profile-form" noValidate onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2">
           <Field id="pf-name" label="Имя" error={errors.name}>
             <Input
               name="name"
-              autoComplete="name"
+              autoComplete="given-name"
               maxLength={255}
               defaultValue={user?.name ?? ""}
               onChange={() => errors.name && setErrors((e) => ({ ...e, name: undefined }))}
@@ -128,7 +133,18 @@ function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
               {...describedBy("pf-name", errors.name)}
             />
           </Field>
-          <Field id="pf-phone" label="Телефон" error={errors.phone}>
+          <Field id="pf-last-name" label="Фамилия" error={errors.last_name}>
+            <Input
+              name="last_name"
+              autoComplete="family-name"
+              maxLength={255}
+              defaultValue={user?.last_name ?? ""}
+              onChange={() => errors.last_name && setErrors((e) => ({ ...e, last_name: undefined }))}
+              className={FIELD}
+              {...describedBy("pf-last-name", errors.last_name)}
+            />
+          </Field>
+          <Field id="pf-phone" label="Телефон" error={errors.phone} className="sm:col-span-2">
             <Input
               name="phone"
               type="tel"
@@ -142,7 +158,11 @@ function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
               {...describedBy("pf-phone", errors.phone)}
             />
           </Field>
-          {formError && <FormError>{formError}</FormError>}
+          {formError && (
+            <div className="sm:col-span-2">
+              <FormError>{formError}</FormError>
+            </div>
+          )}
         </form>
         <DialogFooter className="-mx-5 -mb-5 rounded-b-xl px-5 sm:-mx-6 sm:-mb-6 sm:px-6">
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>

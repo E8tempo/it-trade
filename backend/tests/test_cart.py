@@ -1,12 +1,12 @@
-"""The cart of a client: only for people of an approved organization, at its wholesale prices; quantities, products
-that cannot be ordered, totals of both payment methods."""
+"""The cart of a client: as a private person at the retail prices, or for an approved organization at its wholesale
+ones; quantities, products that cannot be ordered, totals of both payment methods."""
 
 import itertools
 from decimal import Decimal
 
 import httpx
 import pytest
-from conftest import approve, client_of, register, reset_db
+from conftest import approve, auth, client_of, company_inn, register, reset_db
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
@@ -16,7 +16,8 @@ from app.db import SessionLocal
 from app.models import Cart, Category, Product, ProductImage
 from app.models.catalog import ImageStatus
 
-# sku: (name, wholesale cash, wholesale cashless, multiplicity, product fields); retail prices are never used
+# sku: (name, wholesale cash, wholesale cashless, multiplicity, product fields); the retail prices (a private
+# person's) are 999 cash and 1010 cashless
 PRODUCTS = {
     1: ("Мышь", "100", "105", 1, {}),
     2: ("Бумага A4", "10", "11", 5, {}),  # sold in packs of 5
@@ -39,7 +40,7 @@ async def db():
             s.add(Product(
                 sku=sku, name=name, slug=f"p{sku}", vendor="HP", part=f"P-{sku}", category_id=1, search_text=name.lower(),
                 multiplicity=multiplicity, qty_central=3, qty_nearest=2, **{"in_stock": True, **fields},
-                price=Decimal(999), price_retail_cashless=Decimal(999),
+                price=Decimal(999), price_retail_cashless=Decimal(1010),
                 price_wholesale_cash=cash and Decimal(cash), price_wholesale_cashless=cashless and Decimal(cashless),
             ))
         await s.flush()
@@ -85,24 +86,18 @@ def lines(cart: dict) -> list[tuple[int, int]]:
     return [(i["sku"], i["qty"]) for i in cart["items"]]
 
 
-async def test_only_clients_of_an_approved_organization_have_a_cart(client):
-    # guests: no cart, no prices (the site sells to businesses only)
+async def test_a_person_buys_at_the_retail_prices_until_an_organization_is_approved(client):
+    # guests: no cart, no prices
     for r in (await client.get("/api/cart"), await client.post("/api/cart/items", json={"items": [{"sku": 1, "qty": 1}]}),
               await client.get("/api/cart/prices", params={"sku": 1})):
         assert r.status_code == 401
-    # registered, the organization not checked yet
-    await register(client, "new@example.com")
-    for r in (await client.get("/api/cart"), await client.post("/api/cart/items", json={"items": [{"sku": 1, "qty": 1}]}),
-              await client.get("/api/cart/prices", params={"sku": 1})):
-        assert r.status_code == 403 and r.json()["detail"] == cart_api.NO_PRICES
-    org_id = await approve("new@example.com")
-
+    # registered: a private person, at the retail prices
+    h = auth((await register(client, "new@example.com", organization=False))["access_token"])
     r = await client.get("/api/cart")
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
     assert r.json() == {
-        "audience": "wholesale", "organization": {"id": org_id, "name": "ООО «new»", "inn": r.json()["organization"]["inn"]},
-        "payment": "cash", "price_type": "wholesale_cash", "items": [], "lines": 0, "units": 0, "total": 0.0,
-        "totals": {"cash": 0.0, "cashless": 0.0}, "can_checkout": False, "not_added": [],
+        "audience": "retail", "organization": None, "payment": "cash", "price_type": "retail_cash", "items": [], "lines": 0, "units": 0,
+        "total": 0.0, "totals": {"cash": 0.0, "cashless": 0.0}, "can_checkout": False, "not_added": [],
     }
     me = (await client.get("/api/auth/me")).json()["id"]
     assert await cart_rows(me) is None  # reads never create a cart
@@ -111,8 +106,20 @@ async def test_only_clients_of_an_approved_organization_have_a_cart(client):
     assert (await client.post("/api/cart/items", json={"items": [{"sku": 3, "qty": 1}]})).json()["not_added"] == [{"sku": 3, "reason": "out_of_stock"}]
     assert await cart_rows(me) is None
     assert (await client.get("/api/cart", params={"payment": "card"})).status_code == 422
+    r = (await client.post("/api/cart/items", json={"items": [{"sku": 1, "qty": 2}]})).json()
+    assert (r["price_type"], r["items"][0]["prices"], r["total"]) == ("retail_cash", {"cash": 999.0, "cashless": 1010.0}, 1998.0)
+    assert (await client.get("/api/cart/prices", params={"sku": 1})).json() == {"audience": "retail", "prices": {"1": {"cash": 999.0, "cashless": 1010.0}}}
+    await client.delete("/api/cart")
 
-    # the first change creates it, at the organization's wholesale prices
+    # an organization added: the person goes on buying until a manager approves it, then the organization does
+    org = {"name": "ООО «new»", "inn": company_inn(5000)}
+    assert (await client.post("/api/account/organizations", json=org, headers=h)).status_code == 201
+    assert (await client.get("/api/cart")).json()["organization"] is None
+    org_id = await approve("new@example.com")
+    r = await client.get("/api/cart")
+    assert (r.json()["audience"], r.json()["organization"]) == ("wholesale", {"id": org_id, "name": "ООО «new»", "inn": org["inn"]})
+
+    # the first line at the organization's wholesale prices
     r = await client.post("/api/cart/items", json={"items": [{"sku": 1, "qty": 2}]})
     (line,) = r.json()["items"]
     assert line == {

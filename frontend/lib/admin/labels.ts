@@ -30,7 +30,8 @@ export const SOURCE: Record<OrderSource, string> = {
 export const PAYMENT: Record<PaymentMethod, string> = { cash: "Наличные", cashless: "Безналичный расчёт" };
 export const PAYMENT_SHORT: Record<PaymentMethod, string> = { cash: "нал", cashless: "безнал" };
 
-export const AUDIENCE: Record<Audience, string> = { retail: "Розница", wholesale: "Опт" };
+/** Whose prices: organizations pay the wholesale ones, private persons the retail ones. */
+export const AUDIENCE: Record<Audience, string> = { retail: "Физ. лица", wholesale: "Опт" };
 
 export const ORG_STATUSES: { value: OrganizationStatus; label: string; tone: string }[] = [
   { value: "pending", label: "На проверке", tone: "bg-amber-500/15 text-amber-800" },

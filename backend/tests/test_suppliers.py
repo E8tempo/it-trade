@@ -198,7 +198,7 @@ async def test_admin_order_with_payment_method_and_audience(admin):
     o2 = r.json()
     assert (o2["payment_method"], o2["price_type"]) == ("cashless", "retail_cashless")
     assert [i["price"] for i in o2["items"]] == [p20["wholesale_cashless"], 450] and o2["total"] == o["total"]
-    assert o2["events"][-1]["note"] == "Цены: опт → розница" and o2["events"][-1]["status"] is None
+    assert o2["events"][-1]["note"] == "Цены: опт → физ. лица" and o2["events"][-1]["status"] is None
 
     # lines sent without a price take the price of the new type
     r = await admin.patch(

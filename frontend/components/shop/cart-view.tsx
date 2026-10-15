@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Building2, CircleAlert, Clock, FileText, LoaderCircle, LockKeyhole, ShoppingCart, Trash2, X } from "lucide-react";
+import { ArrowLeft, Building2, CircleAlert, FileText, LoaderCircle, LockKeyhole, ShoppingCart, Trash2, UserRound, X } from "lucide-react";
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -9,7 +9,7 @@ import { useNewQuote } from "@/components/account/quotes/quotes-list";
 import { ProductImage } from "@/components/catalog/product-image";
 import { PaymentChoice } from "@/components/shop/choice-card";
 import { errorMessage } from "@/components/shop/errors";
-import { PAYMENT, PROBLEM } from "@/components/shop/labels";
+import { buyerFor, PAYMENT, PROBLEM } from "@/components/shop/labels";
 import { QtyStepper } from "@/components/shop/qty-stepper";
 import { useCart, useSession, type CartLineInput } from "@/components/shop/session-provider";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -48,7 +48,7 @@ export function CartView() {
   const { totals, units, items } = useCartTotals(cart);
   const newQuote = useNewQuote();
 
-  if (access === "guest" || access === "pending") return <NoCart access={access} />;
+  if (access === "guest") return <NoCart />;
   if (loading) return <CartSkeleton />;
   if (!cart && error) {
     return (
@@ -119,16 +119,19 @@ export function CartView() {
       count={items.length}
       action={
         <div className="flex flex-wrap gap-1">
-          <Button
-            variant="ghost"
-            className="h-9 gap-1.5 rounded-xl px-3 text-muted-foreground"
-            onClick={() => newQuote.create(true)}
-            disabled={newQuote.busy !== null || syncing}
-            title="Коммерческое предложение вашему заказчику: эти товары с вашей наценкой"
-          >
-            {newQuote.busy ? <LoaderCircle className="animate-spin" /> : <FileText />}
-            Сделать КП
-          </Button>
+          {/* offers are made by an organization */}
+          {cart.organization && (
+            <Button
+              variant="ghost"
+              className="h-9 gap-1.5 rounded-xl px-3 text-muted-foreground"
+              onClick={() => newQuote.create(true)}
+              disabled={newQuote.busy !== null || syncing}
+              title="Коммерческое предложение вашему заказчику: эти товары с вашей наценкой"
+            >
+              {newQuote.busy ? <LoaderCircle className="animate-spin" /> : <FileText />}
+              Сделать КП
+            </Button>
+          )}
           <Button variant="ghost" className="h-9 gap-1.5 rounded-xl px-3 text-muted-foreground" onClick={onClear} disabled={clearing}>
             {clearing ? <LoaderCircle className="animate-spin" /> : <X />}
             Очистить корзину
@@ -172,12 +175,12 @@ export function CartView() {
         <aside className="lg:sticky lg:top-24 lg:self-start" aria-label="Сумма заказа">
           <div className="space-y-5 rounded-3xl border p-5 sm:p-6">
             <p className="flex items-center gap-2 rounded-xl bg-primary/[0.06] px-3 py-2 text-[13px] font-medium text-primary">
-              <Building2 className="size-4 shrink-0" />
-              <span className="truncate">Цены для {cart.organization.name}</span>
+              {cart.organization ? <Building2 className="size-4 shrink-0" /> : <UserRound className="size-4 shrink-0" />}
+              <span className="truncate">Цены для {buyerFor(cart)}</span>
             </p>
             <div className="space-y-3">
               <h2 className="text-base font-semibold">Способ оплаты</h2>
-              <PaymentChoice value={payment} onChange={setPayment} totals={totals} />
+              <PaymentChoice value={payment} onChange={setPayment} totals={totals} person={!cart.organization} />
             </div>
             <dl className="space-y-2 border-t pt-4 text-sm">
               <div className="flex justify-between gap-4">
@@ -359,35 +362,23 @@ function EmptyCart() {
   );
 }
 
-/** The cart is a client's: a guest learns how to become one, a client being checked waits for it. */
-function NoCart({ access }: { access: "guest" | "pending" }) {
+/** The cart is a client's: a guest learns how to become one. */
+function NoCart() {
   return (
     <CartShell>
       <div className="flex flex-col items-center rounded-3xl bg-muted/50 px-6 py-16 text-center sm:py-20">
         <span className="grid size-14 place-items-center rounded-2xl bg-background shadow-xs">
-          {access === "guest" ? <LockKeyhole className="size-6 text-muted-foreground" /> : <Clock className="size-6 text-amber-700" />}
+          <LockKeyhole className="size-6 text-muted-foreground" />
         </span>
-        <p className="mt-5 text-lg font-semibold">{access === "guest" ? "Корзина — для клиентов" : "Организация на проверке"}</p>
-        <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-          {access === "guest"
-            ? "Мы работаем с компаниями и ИП. Зарегистрируйте организацию или войдите, чтобы видеть цены и оформлять заказы."
-            : "Корзина и заказы откроются, когда менеджер подтвердит вашу организацию. Обычно это занимает рабочий день."}
-        </p>
+        <p className="mt-5 text-lg font-semibold">Корзина — для клиентов</p>
+        <p className="mt-1 max-w-sm text-sm text-muted-foreground">Зарегистрируйтесь или войдите, чтобы видеть цены и оформлять заказы.</p>
         <div className="mt-6 flex flex-wrap justify-center gap-3">
-          {access === "guest" ? (
-            <>
-              <Link href="/register" className={cn(buttonVariants({ size: "lg" }), "h-11 rounded-xl px-5")}>
-                Стать клиентом
-              </Link>
-              <Link href="/login?next=%2Fcart" className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-11 rounded-xl px-5")}>
-                Войти
-              </Link>
-            </>
-          ) : (
-            <Link href="/account/organizations" className={cn(buttonVariants({ size: "lg" }), "h-11 rounded-xl px-5")}>
-              Статус проверки
-            </Link>
-          )}
+          <Link href="/register" className={cn(buttonVariants({ size: "lg" }), "h-11 rounded-xl px-5")}>
+            Стать клиентом
+          </Link>
+          <Link href="/login?next=%2Fcart" className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-11 rounded-xl px-5")}>
+            Войти
+          </Link>
         </div>
       </div>
     </CartShell>

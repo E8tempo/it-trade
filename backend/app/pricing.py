@@ -2,7 +2,8 @@
 
 Every product has a price of each PriceType (retail / wholesale, cash / cashless), each by its own rules
 (PriceRules), stored per supplier in `site_settings` under "pricing:<code>". A price the admin fixed for a
-type (Product.price_overrides) wins over that type's rules.
+type (Product.price_overrides) wins over that type's rules. Organizations pay the wholesale prices, private
+persons the retail ones.
 """
 
 from dataclasses import dataclass
@@ -71,8 +72,8 @@ async def save_supplier_pricing(session: AsyncSession, code: str, pricing: Suppl
 
 
 def can_buy_for(user: User | None, organization: Organization | None) -> bool:
-    """The site sells to businesses only: a user sees prices and orders for an approved organization they are a
-    member of (`members` loaded). They pay its wholesale prices; the retail ones are kept for reference."""
+    """A user buys for an organization once it is approved and they are its member (`members` loaded), at the
+    wholesale prices. Any client may buy as a private person (PERSON_AUDIENCE)."""
     return (
         user is not None
         and organization is not None
@@ -82,7 +83,12 @@ def can_buy_for(user: User | None, organization: Organization | None) -> bool:
 
 
 # whose prices clients pay: the cart and the checkout take the audience only from here
-B2B_AUDIENCE = Audience.wholesale
+B2B_AUDIENCE = Audience.wholesale  # buying for an organization
+PERSON_AUDIENCE = Audience.retail  # buying as a private person
+
+
+def audience_of(organization: Organization | None) -> Audience:
+    return B2B_AUDIENCE if organization is not None else PERSON_AUDIENCE
 
 
 @dataclass(frozen=True)

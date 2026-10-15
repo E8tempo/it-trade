@@ -1,5 +1,6 @@
-"""Checkout of a client for their organization and the orders they see: server-side wholesale prices only, the 409s
-the client recovers from, the flood limit, who sees which orders, and nothing internal shown to clients."""
+"""Checkout of a client for their organization or as a private person and the orders they see: server-side prices
+only (wholesale or retail), the 409s the client recovers from, the flood limit, who sees which orders, and nothing
+internal shown to clients."""
 
 import asyncio
 import itertools
@@ -35,7 +36,7 @@ async def db():
         for sku, name, sp, cash, cashless, multiplicity in [(1, "Мышь", "60", "100", "105", 1), (2, "Бумага A4", "7", "10", "11", 5)]:
             s.add(Product(
                 sku=sku, name=name, slug=f"p{sku}", category_id=1, search_text=name.lower(), in_stock=True, multiplicity=multiplicity,
-                supplier_price=Decimal(sp), price=Decimal(999), price_retail_cashless=Decimal(999),
+                supplier_price=Decimal(sp), price=Decimal(cash) * 2, price_retail_cashless=Decimal(cashless) * 2,
                 price_wholesale_cash=Decimal(cash), price_wholesale_cashless=Decimal(cashless),
             ))
         await s.commit()
@@ -72,12 +73,21 @@ async def checkout(c: httpx.AsyncClient, **fields) -> httpx.Response:
     return await c.post("/api/orders", json={**CONTACTS, **fields})
 
 
-async def test_only_clients_of_an_approved_organization_order(client):
+async def test_a_person_orders_at_the_retail_prices(client, admin):
     r = await checkout(client)
-    assert r.status_code == 401  # guests: the site sells to businesses only
-    await register(client, "pending@example.com")
-    r = await checkout(client)
-    assert r.status_code == 403 and "подтвердит" in r.json()["detail"]
+    assert r.status_code == 401  # guests
+    # registered with an organization that is not checked yet: buys as a private person
+    await register(client, "person@example.com")
+    await fill(client, (1, 1))
+    contract = await checkout(client, contract_id=1)
+    assert contract.status_code == 409 and "Договор недоступен" in contract.json()["detail"]
+    r = await checkout(client, payment_method="cashless", expected_total=210.0)
+    assert r.status_code == 201, r.text
+    o = r.json()
+    assert (o["buyer"], o["total"], [i["price"] for i in o["items"]]) == (None, 210.0, [210.0])
+    assert (await client.get("/api/orders")).json()["items"][0]["buyer_name"] is None
+    d = (await client.get(f"/api/admin/orders/{o['id']}", headers=admin)).json()
+    assert (d["price_type"], d["organization_id"], d["buyer"], d["buyer_name"]) == ("retail_cashless", None, None, None)
 
 
 async def test_order_of_a_client(buyer, admin, client):
@@ -114,7 +124,7 @@ async def test_order_of_a_client(buyer, admin, client):
     assert (d["organization_id"], d["buyer_name"]) == (cart["organization"]["id"], cart["organization"]["name"])
     assert (d["cost_total"], d["margin"]) == (155.0, 110.0)  # supplier prices: 2 * 60 + 5 * 7
     assert [(e["status"], e["note"], e["author"]) for e in d["events"]] == [("new", "Заказ оформлен на сайте", "Пётр")]
-    assert (me["name"], me["phone"]) == ("Пётр", "+7 (978) 111-22-33")  # remembered for the next checkout
+    assert (me["name"], me["last_name"], me["phone"]) == ("Иван", "Петров", "+7 978 000-00-00")  # the account's own stay
 
 
 async def test_checkout_refuses_carts_that_changed(buyer):

@@ -1,22 +1,22 @@
 "use client";
 
-import { Building2, Clock, LockKeyhole } from "lucide-react";
+import { Building2, LockKeyhole, UserRound } from "lucide-react";
 import Link from "next/link";
 
 import { useBuyerPrices } from "@/components/shop/buyer-prices";
+import { buyerFor } from "@/components/shop/labels";
 import { authHref } from "@/components/shop/next-url";
-import { useCart, useSession } from "@/components/shop/session-provider";
+import { useCart } from "@/components/shop/session-provider";
 import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatPrice } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
- * The product's price for the client's organization, for cash and, when it differs, cashless. A guest sees how to
- * get prices; a client whose organization is being checked, that they are coming.
+ * The product's price for whoever the client buys as (an organization or a private person), for cash and, when it
+ * differs, cashless. A guest sees how to get prices.
  */
 export function ProductPrice({ sku, path }: { sku: number; path: string }) {
-  const { access } = useSession();
   const { cart } = useCart();
   const buyer = useBuyerPrices(sku);
 
@@ -34,8 +34,8 @@ export function ProductPrice({ sku, path }: { sku: number; path: string }) {
       <>
         {cart && (
           <p className="flex items-center gap-1.5 text-[13px] font-medium text-primary">
-            <Building2 className="size-3.5" />
-            <span className="truncate">Цена для {cart.organization.name}</span>
+            {cart.organization ? <Building2 className="size-3.5" /> : <UserRound className="size-3.5" />}
+            <span className="truncate">Цена для {buyerFor(cart)}</span>
           </p>
         )}
         <p className="text-[32px] leading-none font-semibold tracking-tight tabular-nums">{formatPrice(cash)}</p>
@@ -47,26 +47,13 @@ export function ProductPrice({ sku, path }: { sku: number; path: string }) {
       </>
     );
   }
-  if (access === "pending") {
-    return (
-      <div className="flex gap-3 rounded-2xl bg-amber-500/10 p-4 text-sm">
-        <Clock className="mt-0.5 size-5 shrink-0 text-amber-700" />
-        <p>
-          <span className="font-medium">Цены откроются после проверки организации.</span>{" "}
-          <Link href="/account/organizations" className="text-primary hover:underline">
-            Статус проверки
-          </Link>
-        </p>
-      </div>
-    );
-  }
   return (
     <div className="space-y-3 rounded-2xl bg-muted/60 p-4">
       <p className="flex gap-2.5 text-sm">
         <LockKeyhole className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
         <span>
-          <span className="font-medium">Цены и заказ — для компаний-клиентов.</span> Зарегистрируйте организацию: после проверки
-          откроются оптовые цены.
+          <span className="font-medium">Цены и заказ — для клиентов.</span> Зарегистрируйтесь, чтобы видеть цены. Добавьте организацию —
+          после проверки откроются оптовые цены.
         </span>
       </p>
       <div className="flex flex-wrap gap-2">

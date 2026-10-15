@@ -44,7 +44,7 @@ export function OrdersTable({ orders }: { orders: OrderListItem[] }) {
               <div className="font-medium tabular-nums">{money(o.total)}</div>
               <div className="text-xs text-muted-foreground">
                 {PAYMENT_SHORT[o.payment_method]}
-                {PRICE_TYPE[o.price_type].audience === "retail" && " · розница"}
+                {PRICE_TYPE[o.price_type].audience === "retail" && " · физ. лицо"}
               </div>
             </TableCell>
             <TableCell className="hidden text-muted-foreground md:table-cell">{SOURCE[o.source]}</TableCell>

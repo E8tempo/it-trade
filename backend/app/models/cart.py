@@ -8,14 +8,16 @@ from app.models.organizations import Organization
 
 
 class Cart(TimestampMixin, Base):
-    """The cart of a client's user. Prices are those of the organization the user works for now (chosen in the
-    site header), kept here; `updated_at` is bumped on every change of the lines."""
+    """The cart of a client's user, priced for whoever they buy as now (chosen in the site header, kept here): an
+    organization of theirs, or themselves as a private person. `updated_at` is bumped on every change of the lines."""
 
     __tablename__ = "carts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True)
     organization_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id", ondelete="SET NULL"))
+    # chose to buy as a private person: else an organization wins over the person (app/api/cart.py: find_buyer)
+    as_person: Mapped[bool] = mapped_column(default=False)
 
     organization: Mapped["Organization | None"] = relationship()
     items: Mapped[list["CartItem"]] = relationship(

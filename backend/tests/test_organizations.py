@@ -1,13 +1,13 @@
-"""Client organizations: registration with one, requisites checks, one record per company, its people and their
-roles, the manager's check and contracts, switching the organization the cart is priced for, and orders keeping
-its requisites."""
+"""Client organizations: adding one, requisites checks, one record per company, its people and their roles, the
+manager's check and contracts, switching between the organizations and the private person the cart is priced for,
+and orders keeping its requisites."""
 
 import itertools
 from decimal import Decimal
 
 import httpx
 import pytest
-from conftest import signup_code, approve, client_of, company_inn, login, register, reset_db
+from conftest import approve, client_of, company_inn, login, register, reset_db
 
 from app.api import account as account_api
 from app.api import orders as orders_api
@@ -88,32 +88,32 @@ def test_requisites_check_digits():
     assert not valid_ogrn("1027700132196") and not valid_ogrn("304500116000158") and not valid_ogrn("12345")
 
 
-async def test_registration_with_an_organization(client, admin, browser):
+async def test_adding_an_organization(client, admin, browser):
     ivan = browser()
-    user = (await register(ivan, "ivan@example.com", organization={**COMPANY, "inn": " 7707 083 893 ", "address": "  "}, name="Иван"))["user"]
-    assert user["email"] == "ivan@example.com"
+    await register(ivan, "ivan@example.com", organization={**COMPANY, "inn": " 7707 083 893 ", "address": "  "})
     (org,) = await orgs_of(ivan)
     assert (org["name"], org["inn"], org["kpp"], org["address"], org["status"], org["role"], org["contracts"]) == (
         "ООО «Ромашка»", "7707083893", "773601001", None, "pending", "owner", [],
     )
 
-    # the organization is required and checked; nothing is created when it is refused
+    # the requisites are checked; nothing is created when they are refused
     other = browser()
-    base = {"email": "petr@example.com", "password": "secret-123", "code": await signup_code(other, "petr@example.com")}
+    await register(other, "petr@example.com", organization=False)
     cases = [
         ({}, None),
-        ({"organization": {**fresh(), "inn": "7707083894"}}, "Контрольная цифра ИНН"),
-        ({"organization": {**fresh(), "inn": "12345"}}, "10 цифр у организации"),
-        ({"organization": fresh(kpp="12345")}, "Проверьте КПП"),
-        ({"organization": fresh(ogrn="1027700132196")}, "Проверьте ОГРН"),
-        ({"organization": fresh(ogrn="304500116000157")}, "Проверьте ОГРН"),  # a sole trader's number for a company
-        ({"organization": {**SOLE_TRADER, "ogrn": "1027700132195"}}, "Проверьте ОГРНИП"),
-        ({"organization": fresh(name=" ")}, None),
-        ({"organization": fresh(address="x" * 513)}, None),
+        ({**fresh(), "inn": "7707083894"}, "Контрольная цифра ИНН"),
+        ({**fresh(), "inn": "12345"}, "10 цифр у организации"),
+        (fresh(kpp="12345"), "Проверьте КПП"),
+        (fresh(ogrn="1027700132196"), "Проверьте ОГРН"),
+        (fresh(ogrn="304500116000157"), "Проверьте ОГРН"),  # a sole trader's number for a company
+        ({**SOLE_TRADER, "ogrn": "1027700132195"}, "Проверьте ОГРНИП"),
+        (fresh(name=" "), None),
+        (fresh(address="x" * 513), None),
     ]
-    for fields, message in cases:
-        r = await other.post("/api/auth/register", json={**base, **fields})
-        assert r.status_code == 422 and (message is None or message in r.text), fields
+    for body, message in cases:
+        r = await other.post("/api/account/organizations", json=body)
+        assert r.status_code == 422 and (message is None or message in r.text), body
+    assert await orgs_of(other) == []
     # Someone else's request for the same company is accepted while ivan's is not checked: whoever registers
     # a company's ИНН first does not lock the company out. Only one of them can be approved.
     squatter = browser()
@@ -127,15 +127,14 @@ async def test_registration_with_an_organization(client, admin, browser):
     await review(client, admin, fake["id"], "rejected", "Не ваша организация")
     # the company is a client now: the same ИНН and КПП, or a missing КПП, is refused
     for org in (COMPANY, {**COMPANY, "kpp": None}, {"name": "Другое имя", "inn": "7707083893"}):
-        r = await other.post("/api/auth/register", json={**base, "organization": org})
+        r = await other.post("/api/account/organizations", json=org)
         assert r.status_code == 409 and r.json()["detail"] == account_api.ALREADY_REGISTERED
-    assert (await other.post("/api/auth/login", json=base)).status_code == 401  # no user was created
+    assert await orgs_of(other) == []
     # a branch (the same ИНН, another КПП) is another client; a sole trader has no КПП
-    await register(other, "petr@example.com", organization={**COMPANY, "kpp": "773602002"}, code=base["code"])
-    trader = (await register(browser(), "trader@example.com", organization={**SOLE_TRADER, "kpp": "773601001"}))["user"]
-    assert trader["email"] == "trader@example.com"
-    r = await other.post("/api/auth/register", json={"email": "ivan@example.com", "code": "000000", "password": "secret-123", "organization": fresh()})
-    assert r.status_code == 400  # the e-mail is registered: refused like a wrong code, not told
+    assert (await other.post("/api/account/organizations", json={**COMPANY, "kpp": "773602002"})).status_code == 201
+    trader = browser()
+    await register(trader, "trader@example.com", organization={**SOLE_TRADER, "kpp": "773601001"})
+    assert [(o["inn"], o["kpp"]) for o in await orgs_of(trader)] == [(SOLE_TRADER["inn"], None)]
 
 
 async def test_client_manages_organizations(client, admin, browser):
@@ -195,14 +194,14 @@ async def test_organizations_limit(browser, monkeypatch):
 
 async def test_manager_checks_organizations_people_and_contracts(client, admin, browser):
     petr = browser()
-    await register(petr, "petr2@example.com", organization=fresh(name="ИП Петров"), name="Пётр", phone="+79780000000")
+    await register(petr, "petr2@example.com", organization=fresh(name="ИП Петров"), name="Пётр", last_name="Петров", phone="+79780000000")
     (org,) = await orgs_of(petr)
     assert (await client.get("/api/admin/dashboard", headers=admin)).json()["organizations"]["pending"] >= 1
 
     page = (await client.get("/api/admin/organizations", params={"q": "petr2@"}, headers=admin)).json()
     (item,) = page["items"]
     assert (item["id"], item["status"], item["owner"]["email"], item["owner"]["name"], item["members"], item["contracts"]) == (
-        org["id"], "pending", "petr2@example.com", "Пётр", 1, 0,
+        org["id"], "pending", "petr2@example.com", "Пётр Петров", 1, 0,
     )
     assert page["counts"]["pending"] >= 1
     assert [o["id"] for o in (await client.get("/api/admin/organizations", params={"q": org["inn"][2:9]}, headers=admin)).json()["items"]] == [org["id"]]
@@ -268,29 +267,38 @@ async def test_switching_the_organization_of_the_cart(client, admin, browser):
     second = (await olga.post("/api/account/organizations", json=fresh(name="ООО «Вторая»"))).json()
     await olga.post("/api/cart/items", json={"items": [{"sku": 1, "qty": 2}]})
 
-    # not checked yet: it cannot be chosen
+    # not checked yet: it cannot be chosen, the cart stays with the first one
     r = await olga.put("/api/cart/organization", json={"organization_id": second["id"]})
     assert r.status_code == 409 and "ещё не подтверждена" in r.json()["detail"]
+    assert (await olga.get("/api/cart")).json()["organization"]["id"] == first_id
+    # once approved, the organization just added is the one the cart is for
     await review(client, admin, second["id"], "approved")
-    cart = (await olga.put("/api/cart/organization?payment=cashless", json={"organization_id": second["id"]})).json()
-    assert (cart["organization"]["id"], cart["price_type"], cart["totals"]) == (second["id"], "wholesale_cashless", {"cash": 160.0, "cashless": 168.0})
-    assert (await olga.get("/api/cart")).json()["organization"]["id"] == second["id"]  # kept, the lines too
+    assert (await olga.get("/api/cart")).json()["organization"]["id"] == second["id"]
+
+    # the user as a private person, at the retail prices; the choice is kept, the lines too
+    cart = (await olga.put("/api/cart/organization?payment=cashless", json={"organization_id": None})).json()
+    assert (cart["organization"], cart["price_type"], cart["totals"]) == (None, "retail_cashless", {"cash": 200.0, "cashless": 210.0})
+    assert (await olga.get("/api/cart")).json()["organization"] is None
+    assert (await olga.put("/api/cart/organization", json={})).json()["organization"] is None
+    cart = (await olga.put("/api/cart/organization?payment=cashless", json={"organization_id": first_id})).json()
+    assert (cart["organization"]["id"], cart["price_type"], cart["totals"]) == (first_id, "wholesale_cashless", {"cash": 160.0, "cashless": 168.0})
+    assert (await olga.get("/api/cart")).json()["organization"]["id"] == first_id
     # someone else's organization, an unknown one, a bad body
     stranger = await client_of(client, "stranger@example.com")
     stranger_org = (await stranger.get("/api/cart")).json()["organization"]["id"]
     for org_id in (stranger_org, 10**6):
         r = await olga.put("/api/cart/organization", json={"organization_id": org_id})
         assert r.status_code == 404 and r.json()["detail"] == "Организация не найдена"
-    assert (await olga.put("/api/cart/organization", json={"organization_id": None})).status_code == 422
+    assert (await olga.put("/api/cart/organization", json={"organization_id": 0})).status_code == 422
 
-    # the chosen one is rejected: the cart falls back to another approved one; none left: no prices
-    await review(client, admin, second["id"], "rejected", "Нет договора")
-    assert (await olga.get("/api/cart")).json()["organization"]["id"] == first_id
+    # the chosen one is checked again: the cart falls back to another approved one; none left: the private person
     await review(client, admin, first_id, "pending")
-    r = await olga.get("/api/cart")
-    assert r.status_code == 403
-    await review(client, admin, second["id"], "approved")
-    assert (await olga.get("/api/cart")).json()["lines"] == 1
+    assert (await olga.get("/api/cart")).json()["organization"]["id"] == second["id"]
+    await review(client, admin, second["id"], "rejected", "Нет договора")
+    r = (await olga.get("/api/cart")).json()
+    assert (r["organization"], r["audience"], r["lines"]) == (None, "retail", 1)
+    await review(client, admin, first_id, "approved")
+    assert (await olga.get("/api/cart")).json()["organization"]["id"] == first_id
     await stranger.aclose()
     await olga.aclose()
 
@@ -337,7 +345,7 @@ async def test_order_keeps_the_requisites_of_its_organization(client, admin):
     d = (await ivan.get(f"/api/orders/{o['id']}")).json()
     assert (d["buyer"]["name"], d["buyer"]["contract"]["number"]) == (org["name"], "15/2026")
     assert [i["buyer_name"] for i in (await ivan.get("/api/orders")).json()["items"]] == [org["name"]] * 2
-    assert (await ivan.get("/api/cart")).status_code == 403  # no organization left
+    assert (await ivan.get("/api/cart")).json()["organization"] is None  # no organization left: the private person
     for c in (ivan, other):
         await c.aclose()
     assert await approve("other@example.com") == other_org

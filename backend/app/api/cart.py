@@ -1,8 +1,9 @@
 """The cart of a client's user.
 
-The site sells to businesses only: the cart is priced for the organization the user works for now (chosen in the
-site header, kept on the cart), at its wholesale prices for the chosen payment method. Guests get 401, users without
-an approved organization 403. Reads never create a cart, the first change does.
+The cart is priced for whoever the user buys as now (chosen in the site header, kept on the cart): an approved
+organization of theirs, at the wholesale prices, or themselves as a private person, at the retail ones; either for
+the chosen payment method. An organization wins over the person unless the user chose the person. Guests get 401.
+Reads never create a cart, the first change does.
 """
 
 from dataclasses import dataclass
@@ -31,14 +32,13 @@ from app.models import (
 )
 from app.models.base import utcnow
 from app.models.catalog import VISIBLE_STATUSES, price_type
-from app.pricing import B2B_AUDIENCE, can_buy_for
+from app.pricing import audience_of, can_buy_for
 
 router = APIRouter(prefix="/api/cart", tags=["cart"])
 
 MAX_QTY = 99_999  # per line
 MAX_LINES = 1000
 MAX_SKU = 2**31 - 1  # products.sku is a 32-bit integer
-NO_PRICES = "Цены и заказы откроются, когда менеджер подтвердит вашу организацию"
 
 Problem = Literal["not_found", "out_of_stock", "no_price"]
 PROBLEM_TEXT: dict[str, str] = {
@@ -71,7 +71,7 @@ class NotAdded(BaseModel):
 
 
 class BuyerOut(BaseModel):
-    """The organization the cart is priced for."""
+    """The organization a cart is priced for."""
 
     id: int
     name: str
@@ -84,7 +84,7 @@ class BuyerOut(BaseModel):
 
 class CartOut(BaseModel):
     audience: Audience
-    organization: BuyerOut  # the organization the cart is priced for
+    organization: BuyerOut | None  # the organization the cart is priced for; None: the user as a private person
     payment: PaymentMethod
     price_type: PriceType
     items: list[CartLine]
@@ -110,7 +110,7 @@ class QtyIn(BaseModel):
 
 
 class BuyerIn(BaseModel):
-    organization_id: int = Field(ge=1, le=MAX_SKU)
+    organization_id: int | None = Field(None, ge=1, le=MAX_SKU, description="None: as a private person")
 
 
 class PricesOut(BaseModel):
@@ -170,7 +170,9 @@ def _money(x: Decimal | None) -> float | None:
     return float(x) if x is not None else None
 
 
-def cart_out(lines: list[Line], audience: Audience, payment: PaymentMethod, buyer: Organization, not_added: list[NotAdded] | None = None) -> CartOut:
+def cart_out(
+    lines: list[Line], audience: Audience, payment: PaymentMethod, buyer: Organization | None, not_added: list[NotAdded] | None = None
+) -> CartOut:
     items = []
     for line in lines:
         p, qty, price = line.product, line.item.qty, line.prices[payment]
@@ -199,7 +201,7 @@ def cart_out(lines: list[Line], audience: Audience, payment: PaymentMethod, buye
     }
     return CartOut(
         audience=audience,
-        organization=BuyerOut.of(buyer),
+        organization=BuyerOut.of(buyer) if buyer is not None else None,
         payment=payment,
         price_type=price_type(audience, payment),
         items=items,
@@ -253,24 +255,42 @@ async def approved_organizations(session: AsyncSession, user: User) -> list[Orga
 
 @dataclass
 class Buyer:
-    """A user who may buy, their cart (None until the first change) and the organization it is priced for."""
+    """A user, their cart (None until the first change) and the organization it is priced for (None: the user
+    buys as a private person)."""
 
     user: User
     cart: Cart | None
-    organization: Organization
+    organization: Organization | None
+
+    @property
+    def audience(self) -> Audience:
+        return audience_of(self.organization)
+
+    def price_type(self, payment: PaymentMethod) -> PriceType:
+        return price_type(self.audience, payment)
 
 
 async def find_buyer(session: AsyncSession, user: User) -> Buyer:
-    """The organization chosen on the cart, while the user may still buy for it; else their first approved one
-    (kept on the cart with its next change). 403 without any."""
+    """Whoever the user chose on the cart: themselves as a private person, or an organization while they may still
+    buy for it. Else an organization wins: their first approved one, and the person only without any. Only the
+    user's own choice is kept on the cart, so an organization chosen while it is checked (one just added) becomes
+    the buyer once it is approved."""
     cart = await _find(session, user.id)
+    if cart is not None and cart.as_person:
+        return Buyer(user, cart, None)
     org = cart.organization if cart is not None else None
     if not can_buy_for(user, org):
         orgs = await approved_organizations(session, user)
-        if not orgs:
-            raise HTTPException(403, NO_PRICES)
-        org = orgs[0]
+        org = orgs[0] if orgs else None
     return Buyer(user, cart, org)
+
+
+async def choose_buyer(session: AsyncSession, user_id: int, organization: Organization | None) -> Cart:
+    """Keeps the user's choice of who they buy as on their cart (made if there is none yet). The caller commits."""
+    cart = await _find(session, user_id) or await _new_cart(session, user_id)
+    cart.organization = organization
+    cart.as_person = organization is None
+    return cart
 
 
 async def _buyer(user: CurrentUser, session: Session) -> Buyer:
@@ -281,16 +301,15 @@ BuyerDep = Annotated[Buyer, Depends(_buyer)]
 
 
 async def _writable(session: AsyncSession, b: Buyer) -> Cart:
-    """The cart to change (created on the first change), priced for the buyer's organization; bumps `updated_at`."""
+    """The cart to change (created on the first change); bumps `updated_at`."""
     b.cart = b.cart or await _new_cart(session, b.user.id)
-    b.cart.organization = b.organization
     b.cart.updated_at = utcnow()
     return b.cart
 
 
 async def _respond(session: AsyncSession, response: Response, b: Buyer, payment: PaymentMethod, not_added: list[NotAdded] | None = None) -> CartOut:
     response.headers["Cache-Control"] = "no-store"
-    return cart_out(await priced_lines(session, b.cart, B2B_AUDIENCE), B2B_AUDIENCE, payment, b.organization, not_added)
+    return cart_out(await priced_lines(session, b.cart, b.audience), b.audience, payment, b.organization, not_added)
 
 
 # --- endpoints ------------------------------------------------------------------------------
@@ -305,7 +324,7 @@ async def get_cart(response: Response, session: Session, buyer: BuyerDep, paymen
 async def add_items(body: AddIn, response: Response, session: Session, buyer: BuyerDep, payment: Payment = PaymentMethod.cash):
     """Adds the quantities to the lines already in the cart. Products that cannot be ordered are not added:
     they are listed in `not_added`."""
-    t = price_type(B2B_AUDIENCE, payment)
+    t = buyer.price_type(payment)
     wanted: dict[int, int] = {}
     for i in body.items:
         wanted[i.sku] = wanted.get(i.sku, 0) + i.qty
@@ -341,7 +360,7 @@ async def set_qty(sku: SkuPath, body: QtyIn, response: Response, session: Sessio
             await session.commit()
         return await _respond(session, response, buyer, payment)
     p = (await load_products(session, {sku})).get(sku)
-    if reason := problem(p, p.price_for(price_type(B2B_AUDIENCE, payment)) if p else None):
+    if reason := problem(p, p.price_for(buyer.price_type(payment)) if p else None):
         raise HTTPException(422, PROBLEM_TEXT[reason])
     qty = round_qty(body.qty, p.multiplicity)
     if line is None and buyer.cart is not None and len(buyer.cart.items) >= MAX_LINES:
@@ -375,16 +394,19 @@ async def clear_cart(response: Response, session: Session, buyer: BuyerDep, paym
 
 @router.put("/organization", response_model=CartOut)
 async def set_organization(body: BuyerIn, response: Response, session: Session, user: CurrentUser, payment: Payment = PaymentMethod.cash):
-    """Which of the user's approved organizations the cart is priced for (the switch in the site header)."""
-    org = await session.scalar(select(Organization).where(Organization.id == body.organization_id).options(selectinload(Organization.members)))
-    if org is None or org.role_of(user.id) is None:
-        raise HTTPException(404, "Организация не найдена")
-    if not can_buy_for(user, org):
-        raise HTTPException(409, "Организация ещё не подтверждена: цены станут доступны после проверки")
-    buyer = Buyer(user, await _find(session, user.id), org)
-    await _writable(session, buyer)
+    """Who the cart is priced for (the switch in the site header): one of the user's approved organizations, or
+    the user as a private person (`organization_id` null)."""
+    org = None
+    if body.organization_id is not None:
+        org = await session.scalar(select(Organization).where(Organization.id == body.organization_id).options(selectinload(Organization.members)))
+        if org is None or org.role_of(user.id) is None:
+            raise HTTPException(404, "Организация не найдена")
+        if not can_buy_for(user, org):
+            raise HTTPException(409, "Организация ещё не подтверждена: её цены станут доступны после проверки")
+    cart = await choose_buyer(session, user.id, org)
+    cart.updated_at = utcnow()
     await session.commit()
-    return await _respond(session, response, buyer, payment)
+    return await _respond(session, response, Buyer(user, cart, org), payment)
 
 
 MAX_PRICE_SKUS = 200
@@ -397,14 +419,14 @@ async def buyer_prices(
     buyer: BuyerDep,
     sku: Annotated[list[int], Query(max_length=MAX_PRICE_SKUS, description="Products of the page being viewed")] = [],
 ):
-    """Prices of the given products for the cart's organization: catalog pages are the same for everyone (and show
-    no prices), a client's browser takes them from here. Products not sold are left out."""
+    """Prices of the given products for whoever the cart is priced for: catalog pages are the same for everyone (and
+    show no prices), a client's browser takes them from here. Products not sold are left out."""
     products = await load_products(session, {s for s in sku if 1 <= s <= MAX_SKU})
     response.headers["Cache-Control"] = "no-store"
     return PricesOut(
-        audience=B2B_AUDIENCE,
+        audience=buyer.audience,
         prices={
-            p.sku: {m: _money(p.price_for(price_type(B2B_AUDIENCE, m))) for m in PaymentMethod}
+            p.sku: {m: _money(p.price_for(buyer.price_type(m))) for m in PaymentMethod}
             for p in products.values()
             if p.is_active and not p.is_hidden
         },

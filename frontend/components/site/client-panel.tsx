@@ -5,7 +5,6 @@ import {
   FileText,
   House,
   LayoutGrid,
-  Lock,
   LogOut,
   Package,
   ShoppingCart,
@@ -19,7 +18,8 @@ import { Suspense } from "react";
 import { toast } from "sonner";
 
 import { errorMessage } from "@/components/shop/errors";
-import { useCart, useSession, type Access } from "@/components/shop/session-provider";
+import { fullName } from "@/components/shop/labels";
+import { useCart, useSession } from "@/components/shop/session-provider";
 import { OrgSwitcher } from "@/components/site/org-switcher";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -30,17 +30,15 @@ export type ClientNavItem = {
   href?: string; // none: coming in a later stage
   /** the item is current on these paths too (the catalog's categories, products, search) */
   match?: RegExp;
-  /** only a client of an approved organization may open it */
-  clientOnly?: boolean;
 };
 
 // The client's sections. Later stages fill in the ones without a link.
 export const CLIENT_NAV: ClientNavItem[] = [
   { label: "Главная", icon: House, href: "/" },
   { label: "Каталог", icon: LayoutGrid, href: "/catalog", match: /^\/(catalog|c|p|search)(\/|$)/ },
-  { label: "Корзина", icon: ShoppingCart, href: "/cart", match: /^\/(cart|checkout)(\/|$)/, clientOnly: true },
-  { label: "Заказы", icon: Package, href: "/account/orders", clientOnly: true },
-  { label: "КП для клиентов", icon: FileText, href: "/account/quotes", clientOnly: true },
+  { label: "Корзина", icon: ShoppingCart, href: "/cart", match: /^\/(cart|checkout)(\/|$)/ },
+  { label: "Заказы", icon: Package, href: "/account/orders" },
+  { label: "КП для клиентов", icon: FileText, href: "/account/quotes" },
   { label: "Взаиморасчёты", icon: Wallet },
   { label: "Организации", icon: Building2, href: "/account/organizations" },
   { label: "Профиль", icon: UserRound, href: "/account", match: /^\/account$/ },
@@ -53,8 +51,8 @@ export function isCurrent(item: ClientNavItem, pathname: string | null): boolean
 }
 
 /**
- * The client's side panel, from lg up: the organization they work for and their sections. It shows from the first
- * paint for a visitor who was signed in (the `authed:` variant), with a skeleton until the session is known.
+ * The client's side panel, from lg up: whom they buy as and their sections. It shows from the first paint for a
+ * visitor who was signed in (the `authed:` variant), with a skeleton until the session is known.
  */
 export function ClientSidebar() {
   return (
@@ -83,12 +81,12 @@ function PanelContent() {
     <>
       <OrgSwitcher variant="panel" />
       {/* the current page is only known at request time on dynamic routes, so it streams in */}
-      <Suspense fallback={<NavList access={access} pathname={null} />}>
-        <CurrentNavList access={access} />
+      <Suspense fallback={<NavList pathname={null} />}>
+        <CurrentNavList />
       </Suspense>
       <div className="mt-auto border-t pt-3">
-        <p className="truncate px-2.5 text-sm font-medium">{user.name || user.email}</p>
-        {user.name && <p className="truncate px-2.5 text-xs text-muted-foreground">{user.email}</p>}
+        <p className="truncate px-2.5 text-sm font-medium">{fullName(user) || user.email}</p>
+        {fullName(user) && <p className="truncate px-2.5 text-xs text-muted-foreground">{user.email}</p>}
         <button
           type="button"
           onClick={() => logout().catch((e: unknown) => toast.error(errorMessage(e, "Не удалось выйти. Попробуйте ещё раз.")))}
@@ -102,34 +100,25 @@ function PanelContent() {
   );
 }
 
-function CurrentNavList({ access }: { access: Access }) {
-  return <NavList access={access} pathname={usePathname()} />;
+function CurrentNavList() {
+  return <NavList pathname={usePathname()} />;
 }
 
 const ITEM = "flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors";
 
-function NavList({ access, pathname }: { access: Access; pathname: string | null }) {
+function NavList({ pathname }: { pathname: string | null }) {
   const { cart, qty } = useCart();
   const lines = cart ? cart.items.reduce((n, i) => n + (qty(i.sku) > 0 ? 1 : 0), 0) : 0;
   return (
     <nav className="flex flex-col gap-0.5">
       {CLIENT_NAV.map((item) => {
         const { label, icon: Icon, href } = item;
-        const locked = item.clientOnly && access !== "client";
-        if (!href || locked) {
+        if (!href) {
           return (
-            <span
-              key={label}
-              className={cn(ITEM, "cursor-default text-muted-foreground/60")}
-              title={locked ? "Откроется после подтверждения организации" : "Скоро"}
-            >
+            <span key={label} className={cn(ITEM, "cursor-default text-muted-foreground/60")} title="Скоро">
               <Icon className="size-4" />
               <span className="flex-1">{label}</span>
-              {locked ? (
-                <Lock className="size-3.5" aria-label="после подтверждения организации" />
-              ) : (
-                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium tracking-wide uppercase">скоро</span>
-              )}
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium tracking-wide uppercase">скоро</span>
             </span>
           );
         }

@@ -17,13 +17,12 @@ from collections import defaultdict, deque
 from datetime import timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
-from app.api.account import OrganizationIn, check_not_registered, create_organization, is_registered
 from app.api.deps import ACCESS_COOKIE, REFRESH_COOKIE, REFRESH_COOKIE_PATH, CurrentUser, Session, client_ip
 from app.auth import (
     AuthError,
@@ -37,11 +36,11 @@ from app.auth import (
     rotate_refresh_token,
     verify_password,
 )
-from app.companies import LookupUnavailable, configured, find_company
 from app.config import get_settings
 from app.mail import MailError, send_mail
 from app.models import EmailCode, User
 from app.models.base import utcnow
+from app.models.orders import normalize_phone
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -49,13 +48,14 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class UserOut(BaseModel):
     id: int
     email: str
-    name: str | None
+    name: str | None  # the first name
+    last_name: str | None
     phone: str | None
     role: str
 
     @classmethod
     def of(cls, u: User) -> "UserOut":
-        return cls(id=u.id, email=u.email, name=u.name, phone=u.phone, role=u.role)
+        return cls(id=u.id, email=u.email, name=u.name, last_name=u.last_name, phone=u.phone, role=u.role)
 
 
 class TokenOut(BaseModel):
@@ -67,15 +67,25 @@ class TokenOut(BaseModel):
 
 
 class RegisterIn(BaseModel):
-    """A client registers with their organization (the site sells to businesses only); they become its head.
-    `code`: the one sent to the e-mail (POST /register/code): nobody takes an address that is not theirs."""
+    """A client registers as a private person and buys as one; their organizations are added in the account
+    (app/api/account.py). `code`: the one sent to the e-mail (POST /register/code): nobody takes an address that is
+    not theirs."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     email: EmailStr
     code: str = Field(pattern=r"^\d{6}$")
     password: str = Field(min_length=8, max_length=128)
-    name: str | None = Field(None, max_length=255)
-    phone: str | None = Field(None, max_length=32)
-    organization: OrganizationIn
+    name: str = Field(min_length=1, max_length=255)
+    last_name: str = Field(min_length=1, max_length=255)
+    phone: str = Field(min_length=5, max_length=32)
+
+    @field_validator("phone")
+    @classmethod
+    def _phone(cls, v: str) -> str:
+        if len(normalize_phone(v).lstrip("+")) < 5:
+            raise ValueError("Проверьте номер телефона")
+        return v
 
 
 class SignupCodeIn(BaseModel):
@@ -116,6 +126,7 @@ class PasswordIn(BaseModel):
 
 class ProfileIn(BaseModel):
     name: str | None = Field(None, max_length=255)
+    last_name: str | None = Field(None, max_length=255)
     phone: str | None = Field(None, max_length=32)
 
 
@@ -246,24 +257,6 @@ def _clear_cookies(response: Response) -> None:
 # --- endpoints ------------------------------------------------------------------------------
 
 
-@router.get("/company")
-async def company(inn: Annotated[str, Query(pattern=r"^\d{10}(\d{2})?$")], request: Request, session: Session) -> dict:
-    """The registration form's lookup of a company by ИНН. `configured`: false without a DaData key (the form asks
-    for the requisites by hand, as it does when the lookup fails); `registered`: the company is a client already."""
-    # open to guests: limited per address, like failed logins
-    key = f"company:{client_ip(request)}"
-    _check_throttle(key)
-    _record_failure(key)  # every lookup counts: MAX_FAILURES per WINDOW
-    registered = await is_registered(session, inn)
-    try:
-        found = await find_company(inn)
-    except LookupUnavailable:
-        return {"configured": configured(), "available": False, "company": None, "registered": registered}
-    if found and found.kpp:
-        registered = await is_registered(session, inn, found.kpp)
-    return {"configured": True, "available": True, "company": found.as_dict() if found else None, "registered": registered}
-
-
 @router.post("/register/code", response_model=SignupCodeOut)
 async def signup_code(body: SignupCodeIn, request: Request, session: Session):
     """Sends a code to the address registering: the account is created with it only (POST /register).
@@ -372,11 +365,12 @@ async def register(body: RegisterIn, request: Request, response: Response, sessi
     signups = f"register:{client_ip(request)}"
     _check_throttle(signups)
     _record_failure(signups)
-    await check_not_registered(session, body.organization.inn, body.organization.kpp)
     # the code first: a registered address never got one, so it is refused like any wrong code and the answer
     # does not tell that the address has an account (the conflict below is a race of two sign-ups)
     await _use_code(session, normalize_email(body.email), SIGNUP, body.code)
-    user = User(email=normalize_email(body.email), password_hash=hash_password(body.password), name=body.name, phone=body.phone)
+    user = User(
+        email=normalize_email(body.email), password_hash=hash_password(body.password), name=body.name, last_name=body.last_name, phone=body.phone
+    )
     session.add(user)
     try:
         await session.flush()
@@ -384,7 +378,6 @@ async def register(body: RegisterIn, request: Request, response: Response, sessi
         await session.rollback()
         _record_failure(f"ip:{client_ip(request)}")
         raise HTTPException(status.HTTP_409_CONFLICT, "Email is already registered") from None
-    await create_organization(session, user, body.organization)
     pair = await issue_tokens(session, user, user_agent=request.headers.get("user-agent"))
     user.last_login_at = utcnow()
     await session.commit()

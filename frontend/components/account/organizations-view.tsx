@@ -1,37 +1,53 @@
 "use client";
 
 import { Building2, CircleAlert, Clock, FileText, LoaderCircle, Pencil, Plus, ShoppingCart, Trash2 } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { AccountSkeleton, PageHeading } from "@/components/account/account-shell";
 import { LoadError } from "@/components/account/orders-view";
-import { compact, innError, KPP, validOgrn } from "@/components/account/requisites";
+import { AddOrganizationDialog } from "@/components/account/add-organization";
+import {
+  REQUISITES_KEYS,
+  RequisitesFields,
+  requisitesBody,
+  requisitesErrors,
+  type Requisites,
+  type RequisitesKey,
+} from "@/components/account/requisites-form";
 import { ACCOUNT_CARD, CARD_FOOT, CARD_HEAD, Pill } from "@/components/account/ui";
 import { errorMessage } from "@/components/shop/errors";
-import { describedBy, Field, FIELD, FormError, type FieldErrors } from "@/components/shop/form";
+import { FormError, type FieldErrors } from "@/components/shop/form";
 import { contractTerms, ORG_STATUS } from "@/components/shop/labels";
 import { useCart, useSession } from "@/components/shop/session-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api/client";
 import { formatDate } from "@/lib/format";
-import type { Organization, OrganizationInput } from "@/lib/types";
+import type { Organization } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const DIALOG = "gap-5 p-5 sm:max-w-lg sm:p-6";
 const DIALOG_FOOT = "-mx-5 -mb-5 rounded-b-xl px-5 sm:-mx-6 sm:-mb-6 sm:px-6";
 
 /**
- * The organizations the client works for. A manager checks each one; an approved organization's prices, cart and
- * orders open, and the manager enters its contracts. Its head changes the requisites (in a dialog).
+ * The organizations the client works for. They are added by ИНН (AddOrganizationDialog) and checked by a manager; the
+ * client buys for an approved one at its wholesale prices, and the manager enters its contracts. Its head changes the
+ * requisites (in a dialog).
  */
 export function OrganizationsView() {
   const { organizations, refreshOrganizations } = useSession();
-  const [adding, setAdding] = useState(false);
+  const router = useRouter();
+  // «Добавить организацию» elsewhere on the site links here with ?add=1
+  const asked = useSearchParams().has("add");
+  const [adding, setAddingState] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
+  const setAdding = (open: boolean) => {
+    setAddingState(open);
+    if (!open && asked) router.replace("/account/organizations", { scroll: false });
+  };
 
   const retry = () => {
     setFailed(null);
@@ -45,7 +61,7 @@ export function OrganizationsView() {
     <div className="max-w-4xl">
       <PageHeading
         title="Организации"
-        lead="Компании и ИП, от которых вы работаете. Цены, корзина и заказы относятся к выбранной организации — её можно сменить в любой момент."
+        lead="Компании и ИП, от которых вы работаете. Подтверждённая организация получает оптовые цены, договоры и КП; без неё вы покупаете как физическое лицо. Сменить покупателя можно в шапке сайта."
         action={
           <Button className="h-10 gap-2 rounded-xl px-4" onClick={() => setAdding(true)}>
             <Plus />
@@ -65,7 +81,7 @@ export function OrganizationsView() {
       ) : (
         <NoOrganizations onAdd={() => setAdding(true)} />
       )}
-      <OrganizationDialog open={adding} onOpenChange={setAdding} />
+      <AddOrganizationDialog open={adding || asked} onOpenChange={setAdding} />
     </div>
   );
 }
@@ -75,7 +91,7 @@ function OrganizationCard({ org }: { org: Organization }) {
   const [dialog, setDialog] = useState<"edit" | "delete" | null>(null);
   const [switching, setSwitching] = useState(false);
   const status = ORG_STATUS[org.status];
-  const current = cart?.organization.id === org.id;
+  const current = cart?.organization?.id === org.id;
   const head = org.role === "owner";
   const contracts = org.contracts;
 
@@ -110,7 +126,7 @@ function OrganizationCard({ org }: { org: Organization }) {
       <CardContent className="space-y-6 py-(--card-spacing)">
         {org.status === "pending" && (
           <Notice icon={<Clock className="size-4 text-amber-700" />} tone="bg-amber-500/10">
-            Менеджер проверит реквизиты в рабочее время. После подтверждения откроются цены, корзина и заказы.
+            Менеджер проверит реквизиты в рабочее время. После подтверждения цены, корзина и заказы переключатся на организацию — по оптовым ценам.
           </Notice>
         )}
         {org.status === "rejected" && (
@@ -240,41 +256,15 @@ function DeleteDialog({ org, open, onOpenChange }: { org: Organization; open: bo
   );
 }
 
-type Key = keyof OrganizationInput;
-const KEYS: Key[] = ["inn", "name", "kpp", "ogrn", "address"];
-
-function validate(v: Record<Key, string>): FieldErrors<Key> {
-  const inn = compact(v.inn);
-  const company = inn.length !== 12;
-  const kpp = compact(v.kpp);
-  const ogrn = compact(v.ogrn);
-  const name = v.name.trim();
-  return {
-    name: name.length < 2 ? "Укажите название, как в документах" : name.length > 255 ? "Слишком длинное название" : undefined,
-    inn: innError(inn),
-    kpp: company && kpp && !KPP.test(kpp) ? "КПП — 9 символов" : undefined,
-    ogrn: ogrn && (ogrn.length !== (company ? 13 : 15) || !validOgrn(ogrn)) ? (company ? "Проверьте ОГРН: 13 цифр" : "Проверьте ОГРНИП: 15 цифр") : undefined,
-    address: v.address.trim().length > 512 ? "Слишком длинный адрес" : undefined,
-  };
-}
-
-const EMPTY: Record<Key, string> = { name: "", inn: "", kpp: "", ogrn: "", address: "" };
-
-/** Adding an organization (`org` absent) or changing its requisites, in a dialog. */
-function OrganizationDialog({ org, open, onOpenChange }: { org?: Organization; open: boolean; onOpenChange: (open: boolean) => void }) {
+/** Changing the requisites of an organization, in a dialog. */
+function OrganizationDialog({ org, open, onOpenChange }: { org: Organization; open: boolean; onOpenChange: (open: boolean) => void }) {
   const { refreshOrganizations } = useSession();
-  const initial = () => (org ? { name: org.name, inn: org.inn, kpp: org.kpp ?? "", ogrn: org.ogrn ?? "", address: org.address ?? "" } : EMPTY);
-  const [values, setValues] = useState<Record<Key, string>>(initial);
-  const [errors, setErrors] = useState<FieldErrors<Key>>({});
+  const initial = (): Requisites => ({ name: org.name, inn: org.inn, kpp: org.kpp ?? "", ogrn: org.ogrn ?? "", address: org.address ?? "" });
+  const [values, setValues] = useState<Requisites>(initial);
+  const [errors, setErrors] = useState<FieldErrors<RequisitesKey>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const soleTrader = compact(values.inn).length === 12;
-  const id = org ? `org-${org.id}` : "org-new";
-
-  const set = (key: Key, value: string) => {
-    setValues((v) => ({ ...v, [key]: value }));
-    if (errors[key]) setErrors((e) => ({ ...e, [key]: undefined }));
-  };
+  const id = `org-${org.id}`;
 
   // every opening starts from the saved requisites
   const [wasOpen, setWasOpen] = useState(open);
@@ -290,30 +280,19 @@ function OrganizationDialog({ org, open, onOpenChange }: { org?: Organization; o
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = e.currentTarget;
-    const found = validate(values);
+    const found = requisitesErrors(values);
     setErrors(found);
     setFormError(null);
-    const invalid = KEYS.find((k) => found[k]);
+    const invalid = REQUISITES_KEYS.find((k) => found[k]);
     if (invalid) {
       form.querySelector<HTMLElement>(`[name="${invalid}"]`)?.focus();
       return;
     }
-    const body: OrganizationInput = {
-      name: values.name.trim(),
-      inn: compact(values.inn),
-      kpp: soleTrader ? null : compact(values.kpp) || null,
-      ogrn: compact(values.ogrn) || null,
-      address: values.address.trim() || null,
-    };
     setSaving(true);
     try {
-      const saved = await api<Organization>(org ? `/api/account/organizations/${org.id}` : "/api/account/organizations", {
-        method: org ? "PUT" : "POST",
-        body: JSON.stringify(body),
-      });
+      const saved = await api<Organization>(`/api/account/organizations/${org.id}`, { method: "PUT", body: JSON.stringify(requisitesBody(values)) });
       await refreshOrganizations().catch(() => undefined);
-      if (!org) toast.success("Организация добавлена и отправлена на проверку");
-      else if (saved.status === "pending" && org.status !== "pending") toast.success("Реквизиты сохранены, организация снова на проверке");
+      if (saved.status === "pending" && org.status !== "pending") toast.success("Реквизиты сохранены, организация снова на проверке");
       else toast.success("Реквизиты сохранены");
       onOpenChange(false);
     } catch (err) {
@@ -327,77 +306,23 @@ function OrganizationDialog({ org, open, onOpenChange }: { org?: Organization; o
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={DIALOG}>
         <DialogHeader>
-          <DialogTitle className="text-lg font-semibold">{org ? "Реквизиты организации" : "Новая организация"}</DialogTitle>
+          <DialogTitle className="text-lg font-semibold">Реквизиты организации</DialogTitle>
           <DialogDescription>
-            {org?.status === "approved"
-              ? "Организация уже подтверждена: после изменения она снова уйдёт на проверку, и цены будут недоступны до подтверждения."
-              : org
-                ? "Менеджер проверит реквизиты в рабочее время."
-                : "Нужны ИНН и название — остальное по желанию. Менеджер проверит организацию в рабочее время."}
+            {org.status === "approved"
+              ? "Организация уже подтверждена: после изменения она снова уйдёт на проверку, и до подтверждения вы будете покупать как физическое лицо."
+              : "Менеджер проверит реквизиты в рабочее время."}
           </DialogDescription>
         </DialogHeader>
         <form id={`${id}-form`} noValidate onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2">
-          <Field id={`${id}-inn`} label="ИНН" error={errors.inn} hint="10 цифр у организации, 12 у ИП">
-            <Input
-              name="inn"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={16}
-              value={values.inn}
-              onChange={(e) => set("inn", e.target.value)}
-              className={cn(FIELD, "tabular-nums")}
-              {...describedBy(`${id}-inn`, errors.inn, true)}
-            />
-          </Field>
-          {!soleTrader ? (
-            <Field id={`${id}-kpp`} label="КПП" optional error={errors.kpp}>
-              <Input
-                name="kpp"
-                autoComplete="off"
-                maxLength={12}
-                value={values.kpp}
-                onChange={(e) => set("kpp", e.target.value)}
-                className={cn(FIELD, "tabular-nums")}
-                {...describedBy(`${id}-kpp`, errors.kpp)}
-              />
-            </Field>
-          ) : (
-            <div className="hidden sm:block" />
-          )}
-          <Field id={`${id}-name`} label="Название" error={errors.name} hint="Как в документах: ООО «Ромашка», ИП Иванов И. И." className="sm:col-span-2">
-            <Input
-              name="name"
-              autoComplete="organization"
-              maxLength={255}
-              value={values.name}
-              onChange={(e) => set("name", e.target.value)}
-              className={FIELD}
-              {...describedBy(`${id}-name`, errors.name, true)}
-            />
-          </Field>
-          <Field id={`${id}-ogrn`} label={soleTrader ? "ОГРНИП" : "ОГРН"} optional error={errors.ogrn} className="sm:col-span-2">
-            <Input
-              name="ogrn"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={20}
-              value={values.ogrn}
-              onChange={(e) => set("ogrn", e.target.value)}
-              className={cn(FIELD, "tabular-nums")}
-              {...describedBy(`${id}-ogrn`, errors.ogrn)}
-            />
-          </Field>
-          <Field id={`${id}-address`} label="Юридический адрес" optional error={errors.address} className="sm:col-span-2">
-            <Input
-              name="address"
-              autoComplete="off"
-              maxLength={512}
-              value={values.address}
-              onChange={(e) => set("address", e.target.value)}
-              className={FIELD}
-              {...describedBy(`${id}-address`, errors.address)}
-            />
-          </Field>
+          <RequisitesFields
+            id={id}
+            values={values}
+            errors={errors}
+            onChange={(key, value) => {
+              setValues((v) => ({ ...v, [key]: value }));
+              if (errors[key]) setErrors((e) => ({ ...e, [key]: undefined }));
+            }}
+          />
           {formError && (
             <div className="sm:col-span-2">
               <FormError>{formError}</FormError>
@@ -410,7 +335,7 @@ function OrganizationDialog({ org, open, onOpenChange }: { org?: Organization; o
           </Button>
           <Button type="submit" form={`${id}-form`} disabled={saving}>
             {saving && <LoaderCircle className="animate-spin" />}
-            {org ? "Сохранить" : "Отправить на проверку"}
+            Сохранить
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -425,7 +350,10 @@ function NoOrganizations({ onAdd }: { onAdd: () => void }) {
         <Building2 className="size-6 text-muted-foreground" />
       </span>
       <p className="mt-5 text-lg font-semibold">Организаций пока нет</p>
-      <p className="mt-1 max-w-md text-sm text-muted-foreground">Добавьте компанию или ИП, от которых работаете. Нужны только ИНН и название.</p>
+      <p className="mt-1 max-w-md text-sm text-muted-foreground">
+        Сейчас вы покупаете как физическое лицо. Работаете от компании или ИП? Добавьте её по ИНН — после проверки откроются оптовые цены,
+        договоры и КП.
+      </p>
       <Button className="mt-6 h-11 gap-2 rounded-xl px-5" onClick={onAdd}>
         <Plus />
         Добавить организацию
