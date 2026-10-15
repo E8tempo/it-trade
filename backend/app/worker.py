@@ -30,6 +30,7 @@ from app.sync.stock import sync_stock
 
 log = logging.getLogger("worker")
 RETRY_AFTER = timedelta(minutes=10)
+RETRY = "retry"  # info flag of a failed job: run it again at once (the "Повторить сейчас" button)
 # job_state rows that are not jobs: the worker's heartbeat and the trial batch asked for in the admin panel
 WORKER, TRIAL = "worker", "trial"
 HEARTBEAT_EVERY = 30  # seconds; the admin panel calls the worker stopped after a few missed ones
@@ -70,6 +71,10 @@ def is_due(job: Job, st: JobState | None, now: datetime, states: dict[str, JobSt
         return True
     failed = st.last_success_at is None or st.last_success_at < st.last_started_at
     if failed:
+        # at once when asked from the admin panel, or by a new worker process: it is usually restarted after
+        # the cause was fixed (e.g. the supplier's password in .env, which is read at start); else after a pause
+        if st.info.get(RETRY) or job.name not in started_here:
+            return True
         return now - st.last_started_at >= RETRY_AFTER
     if job.daily:
         tz = ZoneInfo(s.timezone)
@@ -83,6 +88,7 @@ async def run_job(job: Job, client: SupplierClient) -> None:
     async with SessionLocal() as session:
         st = await session.get(JobState, job.name) or JobState(name=job.name, info={})
         st.last_started_at = utcnow()
+        st.info = {k: v for k, v in (st.info or {}).items() if k != RETRY}
         session.add(st)
         await session.commit()
     log.info("job %s: started", job.name)

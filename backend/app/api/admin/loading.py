@@ -32,7 +32,7 @@ from app.models.catalog import VISIBLE_STATUSES, ImageStatus
 from app.site_settings import SITE_RPS_MIN, ImageSettings, ShopSettings, get_settings_obj
 from app.supplier.client import IMAGE_RPS_LIMIT
 from app.sync.images import LIST_BATCH
-from app.worker import HEARTBEAT_EVERY, TRIAL, WORKER
+from app.worker import HEARTBEAT_EVERY, RETRY, RETRY_AFTER, TRIAL, WORKER
 
 router = APIRouter()
 
@@ -287,13 +287,34 @@ def _photo_status(left: int, running: bool, paused: bool, alive: bool, known: bo
     return "running" if running else "waiting"
 
 
+def _job_running(j: JobState | None) -> bool:
+    return bool(j and j.last_started_at and (j.last_finished_at is None or j.last_finished_at < j.last_started_at))
+
+
+def _job_failed(j: JobState | None) -> bool:
+    """The last run ended with an error (a run going on now does not count: it may well succeed)."""
+    return bool(
+        j and j.last_error and not _job_running(j) and (j.last_success_at is None or j.last_success_at < j.last_started_at)
+    )
+
+
+LOGIN_FAILED = "login failed"
+
+
+def _error_text(error: str) -> str:
+    """'app.supplier.client.SupplierError: login failed: ...' -> what it means, without the class path."""
+    if LOGIN_FAILED in error:
+        return "Поставщик не принял логин и пароль"
+    return re.sub(r"^(app|httpx)\.[\w.]+: ", "", error)
+
+
 def _sync_stage(key: str, jobs: dict[str, JobState], detail: str) -> dict[str, Any]:
     j = jobs.get(key)
     if j is None or j.last_started_at is None:
         status = "waiting"
-    elif j.last_finished_at is None or j.last_finished_at < j.last_started_at:
+    elif _job_running(j):
         status = "running"
-    elif j.last_error and (j.last_success_at is None or j.last_success_at < j.last_started_at):
+    elif _job_failed(j):
         status = "error"
     else:
         status = "done"
@@ -314,7 +335,10 @@ def _sync_stage(key: str, jobs: dict[str, JobState], detail: str) -> dict[str, A
         "progress": share,
         "phase": f"{PHASES[phase]}{f', {done}' if done else ''}" if phase in PHASES else None,
         "last_success_at": j.last_success_at if j else None,
-        "error": j.last_error if status == "error" and j else None,
+        "error": _error_text(j.last_error) if status == "error" and j else None,
+        # a failed sync is run again after a pause, or at once when asked
+        "retry_at": (None if j.info.get(RETRY) else j.last_started_at + RETRY_AFTER) if status == "error" and j else None,
+        "retry_requested": bool(status == "error" and j and j.info.get(RETRY)),
     }
 
 
@@ -359,27 +383,36 @@ async def _checks(session, jobs, worker, trial, cfg: ImageSettings, left_bytes: 
     s = get_settings()
     checks = []
 
-    def add(key: str, title: str, status: str, detail: str, hint: str | None = None) -> None:
-        checks.append({"key": key, "title": title, "status": status, "detail": detail, "hint": hint})
+    def add(key: str, title: str, status: str, detail: str, hint: str | None = None, action: str | None = None) -> None:
+        checks.append({"key": key, "title": title, "status": status, "detail": detail, "hint": hint, "action": action})
 
     # supplier
     if not (s.supplier_login and s.supplier_password.get_secret_value()):
         add("supplier", "Поставщик", "error", "Логин и пароль поставщика не заданы", "SUPPLIER_LOGIN и SUPPLIER_PASSWORD в .env")
     else:
-        runs = [jobs.get(k) for k in SYNC_JOBS]
-        broken = [
-            (SYNC_JOBS[j.name], j.last_error)
-            for j in runs
-            if j and j.last_error and (j.last_success_at is None or j.last_success_at < j.last_started_at)
-        ]
-        last = max((j.last_success_at for j in runs if j and j.last_success_at), default=None)
+        runs = [j for k in SYNC_JOBS if (j := jobs.get(k))]
+        broken = [j for j in runs if _job_failed(j)]
+        running = [SYNC_JOBS[j.name] for j in runs if _job_running(j)]
+        last = max((j.last_success_at for j in runs if j.last_success_at), default=None)
+        now_doing = f"; сейчас: {', '.join(running).lower()}" if running else ""
         if broken:
-            name, error = broken[0]
-            add("supplier", "Поставщик", "error", f"{name}: {error[:300]}", "Подробности — в логе воркера")
+            j = broken[0]
+            login = LOGIN_FAILED in (j.last_error or "")
+            add(
+                "supplier",
+                "Поставщик",
+                "error",
+                f"{SYNC_JOBS[j.name]}: {_error_text(j.last_error)[:300]}",
+                "Проверьте SUPPLIER_LOGIN и SUPPLIER_PASSWORD в .env (в разработке backend/.env перекрывает корневой) "
+                "и перезапустите воркер: .env читается при запуске, после перезапуска обмен повторится сразу"
+                if login
+                else "Подробности — в логе воркера",
+                action="retry",
+            )
         elif last is None:
-            add("supplier", "Поставщик", "wait", "Ждём первого обмена: воркер начинает с дерева категорий")
+            add("supplier", "Поставщик", "wait", "Идёт первый обмен" + now_doing if running else "Ждём первого обмена: воркер начинает с дерева категорий")
         else:
-            add("supplier", "Поставщик", "ok", f"Обмен идёт, последний успешный — {_ago(last)}")
+            add("supplier", "Поставщик", "ok", f"Обмен идёт, последний успешный — {_ago(last)}{now_doing}")
 
     # worker
     if worker["heartbeat"] is None:
@@ -568,6 +601,19 @@ async def start_trial(body: TrialIn, session: Session) -> dict[str, Any]:
     session.add(st)
     await session.commit()
     return st.info
+
+
+@router.post("/loading/retry")
+async def retry_syncs(session: Session) -> dict[str, int]:
+    """The supplier syncs that failed run again at once, without waiting for the pause after an error
+    (the worker looks at its jobs every 30 seconds)."""
+    n = 0
+    for j in (await session.scalars(select(JobState).where(JobState.name.in_(SYNC_JOBS)))).all():
+        if _job_failed(j):
+            j.info = {**(j.info or {}), RETRY: True}
+            n += 1
+    await session.commit()
+    return {"queued": n}
 
 
 @router.post("/images/retry-failed")

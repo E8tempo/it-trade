@@ -237,7 +237,14 @@ export type ImageSettings = {
 };
 
 export type CheckStatus = "ok" | "warn" | "error" | "wait";
-export type LoadingCheck = { key: string; title: string; status: CheckStatus; detail: string; hint: string | null };
+export type LoadingCheck = {
+  key: string;
+  title: string;
+  status: CheckStatus;
+  detail: string;
+  hint: string | null;
+  action: "retry" | null; // "retry": the failed supplier syncs can be run again at once
+};
 
 export type StageStatus = "done" | "running" | "waiting" | "paused" | "error" | "off";
 export type LoadingStage = {
@@ -254,6 +261,8 @@ export type LoadingStage = {
   phase?: string | null; // what that sync is doing now
   last_success_at?: string | null;
   error?: string | null;
+  retry_at?: string | null; // a failed sync runs again at this time...
+  retry_requested?: boolean; // ...or within half a minute, when asked
 };
 
 export type TrialStatus = "queued" | "running" | "done" | "interrupted";

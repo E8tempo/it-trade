@@ -5,8 +5,9 @@ import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 
 import { Field } from "@/components/admin/orders/order-fields";
-import { Panel } from "@/components/admin/ui";
+import { RequeueSection } from "@/components/admin/settings-forms";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { apiErrorText } from "@/lib/admin/errors";
@@ -15,8 +16,38 @@ import { api } from "@/lib/api/client";
 
 const num = (v: number) => v.toLocaleString("ru-RU", { maximumFractionDigits: 2 });
 
-/** Photo loading settings; the pause is a separate button in the page header. */
-export function LoadingSettings({ data, onChange }: { data: Loading; onChange: () => void }) {
+const DIALOG = "max-h-[calc(100dvh-2rem)] gap-5 overflow-y-auto p-5 sm:max-w-xl sm:p-6";
+
+/** Photo loading settings and the requeue of processed photos; the pause is a separate button in the page header. */
+export function LoadingSettingsDialog({
+  data,
+  onChange,
+  open,
+  onOpenChange,
+}: {
+  data: Loading;
+  onChange: () => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className={DIALOG}>
+        <DialogHeader>
+          <DialogTitle className="text-lg font-semibold">Настройки загрузки фото</DialogTitle>
+          <DialogDescription>Воркер подхватывает их в течение минуты.</DialogDescription>
+        </DialogHeader>
+        {/* mounted while the dialog is open: it starts from the saved settings every time */}
+        <SettingsForm data={data} onSaved={() => (onChange(), onOpenChange(false))} />
+        <div className="border-t pt-5">
+          <RequeueSection />
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SettingsForm({ data, onSaved }: { data: Loading; onSaved: () => void }) {
   const saved = data.settings;
   const [value, setValue] = useState<ImageSettings>(saved);
   const [busy, setBusy] = useState(false);
@@ -33,7 +64,7 @@ export function LoadingSettings({ data, onChange }: { data: Loading; onChange: (
       const body = { ...value, download_rps: rps, paused: saved.paused };
       setValue(await api<ImageSettings>("/api/admin/settings/images", { method: "PUT", body: JSON.stringify(body) }));
       toast.success("Сохранено. Воркер подхватит настройки в течение минуты");
-      onChange();
+      onSaved();
     } catch (err) {
       toast.error(apiErrorText(err));
     } finally {
@@ -42,8 +73,7 @@ export function LoadingSettings({ data, onChange }: { data: Loading; onChange: (
   }
 
   return (
-    <Panel title="Настройки загрузки фото">
-      <form onSubmit={submit} className="space-y-4">
+    <form onSubmit={submit} className="space-y-4">
         <Field label="Фото на товар">
           <Input
             type="number"
@@ -89,11 +119,13 @@ export function LoadingSettings({ data, onChange }: { data: Loading; onChange: (
             </span>
           </span>
         </label>
-        <Button type="submit" disabled={busy || !dirty}>
-          {busy && <LoaderCircle className="animate-spin" />}
-          Сохранить
-        </Button>
+        <div className="flex justify-end gap-2">
+          <DialogClose render={<Button type="button" variant="ghost" />}>Отмена</DialogClose>
+          <Button type="submit" disabled={busy || !dirty}>
+            {busy && <LoaderCircle className="animate-spin" />}
+            Сохранить
+          </Button>
+        </div>
       </form>
-    </Panel>
   );
 }

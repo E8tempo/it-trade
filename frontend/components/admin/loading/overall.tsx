@@ -148,7 +148,7 @@ function buildParts(stages: Record<string, LoadingStage>, o: Loading["overview"]
         : categories?.status === "running" || products?.status === "running"
           ? "running"
           : "waiting";
-  const productsShare = productsStatus === "done" ? 1 : productsStatus === "running" ? (products?.progress ?? 0.05) : 0;
+  const productsShare = productsStatus === "done" || productsStatus === "error" ? 1 : productsStatus === "running" ? (products?.progress ?? 0.05) : 0;
 
   return [
     {
@@ -159,20 +159,29 @@ function buildParts(stages: Record<string, LoadingStage>, o: Loading["overview"]
       status: productsStatus,
       pulse: productsStatus === "running" && products?.progress == null,
       note:
-        productsStatus === "done"
-          ? `${formatNumber(o.products)} шт.`
-          : productsStatus === "running"
-            ? `${productsStep(categories, products)}${products?.progress != null ? ` ${pct(100 * productsShare)}%` : ""}`
-            : "ждут",
+        productsStatus === "error"
+          ? "ошибка обмена"
+          : productsStatus === "done"
+            ? `${formatNumber(o.products)} шт.`
+            : productsStatus === "running"
+              ? `${productsStep(categories, products)}${products?.progress != null ? ` ${pct(100 * productsShare)}%` : ""}`
+              : "ждут",
     },
     {
       key: "stock",
       title: "Цены и наличие",
       weight: 1.6,
-      share: stock?.status === "done" ? 1 : stock?.status === "running" ? 0.5 : 0,
+      share: stock?.status === "done" || stock?.status === "error" ? 1 : stock?.status === "running" ? 0.5 : 0,
       status: stock?.status ?? "waiting",
       pulse: stock?.status === "running",
-      note: stock?.status === "done" ? `в наличии ${formatNumber(o.in_stock)}` : stock?.status === "running" ? "идёт" : "после товаров",
+      note:
+        stock?.status === "done"
+          ? `в наличии ${formatNumber(o.in_stock)}`
+          : stock?.status === "running"
+            ? "идёт"
+            : stock?.status === "error"
+              ? "ошибка обмена"
+              : "после товаров",
     },
     countedPart(lists, "Списки фото", 1.8),
     countedPart(main, "Главные фото", 3),

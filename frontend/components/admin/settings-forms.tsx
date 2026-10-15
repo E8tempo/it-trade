@@ -99,7 +99,8 @@ export function ShopSettingsForm({ settings }: { settings: ShopSettings }) {
 
 const VARIANTS = { all: "Все фото", big: "Большой знак", mid: "Средний знак", small: "Малый знак", tiny: "Крошечный знак" };
 
-export function RequeuePanel() {
+/** Queues processed photos again; a section of the catalog loading's settings dialog. */
+export function RequeueSection() {
   const [variant, setVariant] = useState("all");
   const [busy, setBusy] = useState(false);
 
@@ -119,7 +120,8 @@ export function RequeuePanel() {
   }
 
   return (
-    <Panel title="Переобработка фото">
+    <section>
+      <h3 className="mb-1 font-medium">Переобработка фото</h3>
       <p className="mb-4 text-sm text-muted-foreground">
         Обычно не нужна: после новой версии обработки фото переобрабатываются сами. Пригодится, чтобы прогнать заново фото одного
         размера знака — например, после перекалибровки его шаблона. Пока новая версия не готова, на сайте видна старая.
@@ -142,6 +144,6 @@ export function RequeuePanel() {
           Переобработать
         </Button>
       </div>
-    </Panel>
+    </section>
   );
 }

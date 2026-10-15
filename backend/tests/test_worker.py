@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from app.models import JobState
-from app.worker import Job, is_due
+from app.worker import RETRY, Job, is_due
 
 NOW = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)  # 15:00 in Simferopol
 
@@ -26,8 +26,18 @@ def test_interval_job():
 def test_failed_job_is_retried_after_a_pause():
     job = Job("stock", _noop, every=timedelta(minutes=30))
     failed = state(NOW - timedelta(minutes=5), NOW - timedelta(minutes=4), NOW - timedelta(hours=2))
-    assert not is_due(job, failed, NOW, {})
-    assert is_due(job, failed, NOW + timedelta(minutes=6), {})
+    assert not is_due(job, failed, NOW, {}, started_here={"stock"})
+    assert is_due(job, failed, NOW + timedelta(minutes=6), {}, started_here={"stock"})
+
+
+def test_failed_job_is_retried_at_once_after_a_restart_or_when_asked():
+    job = Job("stock", _noop, every=timedelta(minutes=30))
+    failed = state(NOW - timedelta(minutes=5), NOW - timedelta(minutes=4), NOW - timedelta(hours=2))
+    # failed in a previous worker process: the cause (e.g. the password in .env) may be fixed by now
+    assert is_due(job, failed, NOW, {})
+    # failed here, but the admin panel asked to retry
+    failed.info = {RETRY: True}
+    assert is_due(job, failed, NOW, {}, started_here={"stock"})
 
 
 def test_job_interrupted_by_a_restart_runs_again_at_once():
