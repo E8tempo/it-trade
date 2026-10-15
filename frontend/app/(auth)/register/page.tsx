@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { RegisterForm } from "@/components/shop/auth-forms";
+import { RegisterForm } from "@/components/shop/register-form";
 import { AuthPage } from "@/components/shop/auth-page";
 
 export const metadata: Metadata = { title: "Регистрация", robots: { index: false } };

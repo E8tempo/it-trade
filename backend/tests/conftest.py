@@ -17,6 +17,7 @@ os.environ.update({
     "ADMIN_PASSWORD": "admin-pass-123",
     "SUPPLIER_LOGIN": "",
     "SUPPLIER_PASSWORD": "",
+    "DADATA_API_KEY": "",
     "CATALOG_SAMPLE_PER_CATEGORY": "0",
 })
 

@@ -135,3 +135,44 @@ def test_empty_jwt_secret_in_env_file_counts_as_unset(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_ENV", "prod")
     with pytest.raises(ValidationError):
         Settings(_env_file=env)
+
+
+async def test_company_lookup_by_inn(client, monkeypatch):
+    import app.api.auth as auth_api
+    import app.companies as companies
+
+    inn = company_inn(7777)
+    # no DaData key: the form asks for the requisites by hand
+    r = await client.get("/api/auth/company", params={"inn": inn})
+    assert r.status_code == 200 and r.json() == {"configured": False, "available": False, "company": None, "registered": False}
+    assert (await client.get("/api/auth/company", params={"inn": "12345"})).status_code == 422
+
+    found = companies.Company(
+        inn=inn, kpp="910201001", ogrn="1149102000000", name="ООО «Лес»", full_name=None, address="Симферополь",
+        manager="Директор Петров П. П.", sole_trader=False, status="ACTIVE",
+    )
+
+    async def fake_find(q):
+        return found if q == inn else None
+
+    monkeypatch.setattr(auth_api, "find_company", fake_find)
+    r = (await client.get("/api/auth/company", params={"inn": inn})).json()
+    assert r["available"] and r["company"]["name"] == "ООО «Лес»" and r["registered"] is False
+    assert (await client.get("/api/auth/company", params={"inn": company_inn(7778)})).json()["company"] is None
+
+    # a client already: the form says so before the rest is filled in
+    org = {"name": "ООО «Лес»", "inn": inn, "kpp": "910201001"}
+    assert (await client.post("/api/auth/register", json={"email": "les@example.com", "password": "secret-123", "organization": org})).status_code == 201
+    client.cookies.clear()
+    assert (await client.get("/api/auth/company", params={"inn": inn})).json()["registered"] is True
+
+
+def test_company_parsing():
+    from app.companies import _parse
+
+    c = _parse({
+        "value": "ИП Иванов Иван Иванович",
+        "data": {"inn": "910200000000", "ogrn": "319910200000000", "type": "INDIVIDUAL", "state": {"status": "ACTIVE"},
+                 "name": {"short_with_opf": "ИП Иванов Иван Иванович"}, "address": {"value": "г Симферополь"}},
+    })
+    assert c.sole_trader and c.kpp is None and c.name == "ИП Иванов Иван Иванович" and c.manager is None

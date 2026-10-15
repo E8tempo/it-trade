@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     catalog_sample_per_category: int = 0  # at most N products per category
     catalog_sample_limit: int = 0  # at most N products in total, spread over the root categories
 
+    # Requisites by ИНН in the registration form (app/companies.py); without a key they are typed by hand
+    dadata_api_key: SecretStr = SecretStr("")
+
     # Media
     media_root: Path = BASE_DIR / "data" / "media"
     media_url: str = "/media"

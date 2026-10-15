@@ -134,14 +134,19 @@ async def _member_of(session: AsyncSession, user: User, org_id: int, owner: bool
     return org
 
 
-async def check_not_registered(session: AsyncSession, inn: str, kpp: str | None, except_id: int | None = None) -> None:
-    """409 when the company is already a client: the same ИНН with the same КПП, or either without one."""
+async def is_registered(session: AsyncSession, inn: str, kpp: str | None = None, except_id: int | None = None) -> bool:
+    """The company is already a client: the same ИНН with the same КПП, or either without one."""
     stmt = select(Organization.id).where(Organization.inn == inn)
     if kpp:
         stmt = stmt.where(or_(Organization.kpp == kpp, Organization.kpp.is_(None)))
     if except_id is not None:
         stmt = stmt.where(Organization.id != except_id)
-    if await session.scalar(stmt.limit(1)) is not None:
+    return await session.scalar(stmt.limit(1)) is not None
+
+
+async def check_not_registered(session: AsyncSession, inn: str, kpp: str | None, except_id: int | None = None) -> None:
+    """409 when the company is already a client (is_registered)."""
+    if await is_registered(session, inn, kpp, except_id):
         raise HTTPException(409, ALREADY_REGISTERED)
 
 

@@ -13,13 +13,13 @@ import time
 from collections import defaultdict, deque
 from typing import Annotated
 
-from fastapi import APIRouter, Body, HTTPException, Request, Response, status
+from fastapi import APIRouter, Body, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.api.account import OrganizationIn, check_not_registered, create_organization
+from app.api.account import OrganizationIn, check_not_registered, create_organization, is_registered
 from app.api.deps import ACCESS_COOKIE, REFRESH_COOKIE, REFRESH_COOKIE_PATH, CurrentUser, Session, client_ip
 from app.auth import (
     AuthError,
@@ -32,6 +32,7 @@ from app.auth import (
     rotate_refresh_token,
     verify_password,
 )
+from app.companies import LookupUnavailable, configured, find_company
 from app.config import get_settings
 from app.models import User
 from app.models.base import utcnow
@@ -129,6 +130,24 @@ def _clear_cookies(response: Response) -> None:
 
 
 # --- endpoints ------------------------------------------------------------------------------
+
+
+@router.get("/company")
+async def company(inn: Annotated[str, Query(pattern=r"^\d{10}(\d{2})?$")], request: Request, session: Session) -> dict:
+    """The registration form's lookup of a company by ИНН. `configured`: false without a DaData key (the form asks
+    for the requisites by hand, as it does when the lookup fails); `registered`: the company is a client already."""
+    # open to guests: limited per address, like failed logins
+    key = f"company:{client_ip(request)}"
+    _check_throttle(key)
+    _record_failure(key)  # every lookup counts: MAX_FAILURES per WINDOW
+    registered = await is_registered(session, inn)
+    try:
+        found = await find_company(inn)
+    except LookupUnavailable:
+        return {"configured": configured(), "available": False, "company": None, "registered": registered}
+    if found and found.kpp:
+        registered = await is_registered(session, inn, found.kpp)
+    return {"configured": True, "available": True, "company": found.as_dict() if found else None, "registered": registered}
 
 
 @router.post("/register", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
