@@ -6,8 +6,8 @@ the client pays us (`cost`, the wholesale price of the offer's payment method) a
 the prices were refreshed, so an offer sent to a customer does not change by itself; the editor shows the lines
 whose price has changed since.
 
-An offer belongs to an organization (the one the user works for when making it): only people of it who may still
-buy for it see it, its owner all of them, a purchaser their own, like the orders.
+An offer belongs to an organization (the one the user works for when making it; a private person makes none): only
+people of it who may still buy for it see it, its owner all of them, a purchaser their own, like the orders.
 """
 
 from datetime import date, datetime, timedelta
@@ -23,7 +23,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.account import _member_of
 from app.api.admin.common import Page
-from app.api.cart import NO_PRICES, Problem, find_buyer, load_products, problem
+from app.api.cart import Problem, find_buyer, load_products, problem
 from app.api.deps import CurrentUser, Session
 from app.api.schemas import ImageOut
 from app.models import (
@@ -52,6 +52,8 @@ MAX_PRICE = Decimal(10) ** 9
 VAT_RATES = (5, 7, 10, 20, 22)
 ROUND_STEPS = (0, 1, 10, 100)  # kopecks, roubles, tens, hundreds
 NOT_FOUND = "КП не найдено"
+NOT_APPROVED = "Организация ещё не подтверждена: КП откроются после проверки"
+NO_ORGANIZATION = "КП составляется от организации: выберите её в шапке сайта или добавьте в разделе «Организации»"
 
 QuoteId = Annotated[int, Path(ge=1, le=MAX_ID)]
 ItemId = Annotated[int, Path(ge=1, le=MAX_ID)]
@@ -283,7 +285,7 @@ async def _out(session: AsyncSession, q: Quote) -> QuoteOut:
             ogrn=org.ogrn,
             address=org.address,
             profile=QuoteProfile.of(org),
-            author_name=author.name if author else None,
+            author_name=author.full_name if author else None,
             author_email=author.email if author else None,
             author_phone=author.phone if author else None,
         ),
@@ -498,7 +500,7 @@ async def my_quotes(
                 title=q.title,
                 customer=q.customer,
                 organization_name=q.organization.name,
-                author_name=(author.name or author.email) if author else None,
+                author_name=(author.full_name or author.email) if author else None,
                 created_at=q.created_at,
                 updated_at=q.updated_at,
                 lines=len(q.items),
@@ -515,6 +517,8 @@ async def create_quote(body: QuoteIn, user: CurrentUser, session: Session):
     `from_cart` takes the cart's products (those we sell)."""
     b = await find_buyer(session, user)
     org = b.organization
+    if org is None:
+        raise HTTPException(409, NO_ORGANIZATION)
     profile = QuoteProfile.of(org)
     payment = body.payment or PaymentMethod.cashless
     q = Quote(
@@ -686,7 +690,7 @@ OrgId = Annotated[int, Path(ge=1, le=MAX_ID)]
 async def get_profile(org_id: OrgId, user: CurrentUser, session: Session, response: Response):
     org = await _member_of(session, user, org_id)
     if not can_buy_for(user, org):
-        raise HTTPException(403, NO_PRICES)
+        raise HTTPException(403, NOT_APPROVED)
     response.headers["Cache-Control"] = "no-store"
     return ProfileOut(**QuoteProfile.of(org).model_dump(), can_edit=org.role_of(user.id) == MemberRole.owner)
 
@@ -696,7 +700,7 @@ async def save_profile(org_id: OrgId, body: QuoteProfile, user: CurrentUser, ses
     """The head of the organization only."""
     org = await _member_of(session, user, org_id, owner=True)
     if not can_buy_for(user, org):
-        raise HTTPException(403, NO_PRICES)
+        raise HTTPException(403, NOT_APPROVED)
     org.quote_profile = body.model_dump(mode="json")
     await session.commit()
     return ProfileOut(**body.model_dump(), can_edit=True)

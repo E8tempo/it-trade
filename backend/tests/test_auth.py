@@ -2,7 +2,7 @@ import re
 from datetime import timedelta
 
 import pytest
-from conftest import company_inn, register, reset_db, signup_code
+from conftest import PERSON, auth, company_inn, register, reset_db, signup_code
 
 import app.auth
 
@@ -22,12 +22,17 @@ def no_throttle():
 
 
 async def test_register_login_me_with_cookies_and_bearer(client):
-    org = {"name": "ООО «Иван»", "inn": company_inn(9998)}
     code = await signup_code(client, "ivan@example.com")
-    r = await client.post("/api/auth/register", json={"email": " Ivan@Example.com ", "code": code, "password": "secret-123", "name": "Иван", "organization": org})
+    person = {"email": " Ivan@Example.com ", "code": code, "password": "secret-123", "name": " Иван ", "last_name": "Петров", "phone": "+7 978 123-45-67"}
+    # a private person: a first and a last name and a phone, no organization
+    for missing in ("name", "last_name", "phone"):
+        assert (await client.post("/api/auth/register", json={**person, missing: " "})).status_code == 422
+    assert (await client.post("/api/auth/register", json={**person, "phone": "+7 (---)"})).status_code == 422
+    r = await client.post("/api/auth/register", json=person)
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["user"]["email"] == "ivan@example.com" and body["user"]["role"] == "customer"
+    assert (body["user"]["name"], body["user"]["last_name"], body["user"]["phone"]) == ("Иван", "Петров", "+7 978 123-45-67")
     assert decode_token(body["access_token"], "access")["sub"] == str(body["user"]["id"])
     set_cookie = r.headers.get_list("set-cookie")
     assert any(c.startswith("access_token=") and "HttpOnly" in c and "Path=/;" in c for c in set_cookie)
@@ -41,8 +46,7 @@ async def test_register_login_me_with_cookies_and_bearer(client):
     me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {body['access_token']}"})
     assert me.status_code == 200
 
-    org = {"name": "ООО «Другая»", "inn": company_inn(9999)}
-    dup = await client.post("/api/auth/register", json={"email": "ivan@example.com", "code": code, "password": "secret-123", "organization": org})
+    dup = await client.post("/api/auth/register", json={**person, "email": "ivan@example.com"})
     assert dup.status_code == 400  # the code is used up; a registered address is refused like a wrong code
     bad = await client.post("/api/auth/login", json={"email": "ivan@example.com", "password": "wrong-pass"})
     assert bad.status_code == 401
@@ -144,14 +148,18 @@ def test_empty_jwt_secret_in_env_file_counts_as_unset(monkeypatch, tmp_path):
 
 
 async def test_company_lookup_by_inn(client, monkeypatch):
-    import app.api.auth as auth_api
+    import app.api.account as account_api
     import app.companies as companies
 
     inn = company_inn(7777)
+    # for a client adding an organization, not for guests
+    assert (await client.get("/api/account/company", params={"inn": inn})).status_code == 401
+    h = auth((await register(client, "lookup@example.com", organization=False))["access_token"])
+    client.cookies.clear()
     # no DaData key: the form asks for the requisites by hand
-    r = await client.get("/api/auth/company", params={"inn": inn})
-    assert r.status_code == 200 and r.json() == {"configured": False, "available": False, "company": None, "registered": False}
-    assert (await client.get("/api/auth/company", params={"inn": "12345"})).status_code == 422
+    r = await client.get("/api/account/company", params={"inn": inn}, headers=h)
+    assert r.status_code == 200 and r.json() == {"configured": False, "available": False, "company": None, "registered": False, "mine": False}
+    assert (await client.get("/api/account/company", params={"inn": "12345"}, headers=h)).status_code == 422
 
     found = companies.Company(
         inn=inn, kpp="910201001", ogrn="1149102000000", name="ООО «Лес»", full_name=None, address="Симферополь",
@@ -161,17 +169,19 @@ async def test_company_lookup_by_inn(client, monkeypatch):
     async def fake_find(q):
         return found if q == inn else None
 
-    monkeypatch.setattr(auth_api, "find_company", fake_find)
-    r = (await client.get("/api/auth/company", params={"inn": inn})).json()
-    assert r["available"] and r["company"]["name"] == "ООО «Лес»" and r["registered"] is False
-    assert (await client.get("/api/auth/company", params={"inn": company_inn(7778)})).json()["company"] is None
+    monkeypatch.setattr(account_api, "find_company", fake_find)
+    r = (await client.get("/api/account/company", params={"inn": inn}, headers=h)).json()
+    assert r["available"] and r["company"]["name"] == "ООО «Лес»" and r["registered"] is False and r["mine"] is False
+    assert (await client.get("/api/account/company", params={"inn": company_inn(7778)}, headers=h)).json()["company"] is None
 
     # a request that is not checked yet does not count; an approved organization is a client, and the form says
     # so before the rest is filled in
     org = {"name": "ООО «Лес»", "inn": inn, "kpp": "910201001"}
-    await register(client, "les@example.com", organization=org)
+    les = auth((await register(client, "les@example.com", organization=org))["access_token"])
     client.cookies.clear()
-    assert (await client.get("/api/auth/company", params={"inn": inn})).json()["registered"] is False
+    assert (await client.get("/api/account/company", params={"inn": inn}, headers=h)).json()["registered"] is False
+    # the form of whoever added it says it is theirs already
+    assert (await client.get("/api/account/company", params={"inn": inn}, headers=les)).json()["mine"] is True
     from sqlalchemy import update
 
     from app.db import SessionLocal
@@ -180,7 +190,12 @@ async def test_company_lookup_by_inn(client, monkeypatch):
     async with SessionLocal() as session:
         await session.execute(update(Organization).where(Organization.inn == inn).values(status=OrganizationStatus.approved))
         await session.commit()
-    assert (await client.get("/api/auth/company", params={"inn": inn})).json()["registered"] is True
+    assert (await client.get("/api/account/company", params={"inn": inn}, headers=h)).json()["registered"] is True
+
+    # lookups of a user are limited
+    for _ in range(account_api.LOOKUPS):
+        await client.get("/api/account/company", params={"inn": inn}, headers=h)
+    assert (await client.get("/api/account/company", params={"inn": inn}, headers=h)).status_code == 429
 
 
 def test_company_parsing():
@@ -196,14 +211,13 @@ def test_company_parsing():
 
 async def test_registration_throttling(client):
     for i in range(10):
-        await register(client, f"bot{i}@example.com", organization={"name": "ООО «Бот»", "inn": company_inn(8000 + i)})
+        await register(client, f"bot{i}@example.com", organization=False)
         client.cookies.clear()
     assert (await client.post("/api/auth/register/code", json={"email": "bot10@example.com"})).status_code == 429
 
 
 async def test_signup_needs_the_code_sent_to_the_address(client, monkeypatch):
-    org = {"name": "ООО «Код»", "inn": company_inn(8100)}
-    body = {"email": "code@example.com", "password": "secret-123", "organization": org}
+    body = {"email": "code@example.com", "password": "secret-123", **PERSON}
     # no code was sent to the address
     assert (await client.post("/api/auth/register", json={**body, "code": "123456"})).json()["detail"] == "Код устарел. Запросите новый."
     code = await signup_code(client, "code@example.com")
@@ -235,13 +249,12 @@ async def test_signup_needs_the_code_sent_to_the_address(client, monkeypatch):
 async def test_code_attempts_run_out(client, monkeypatch):
     import app.api.auth as auth_api
 
-    org = {"name": "ООО «Перебор»", "inn": company_inn(8200)}
     code = await signup_code(client, "brute@example.com")
     wrong = "000000" if code != "000000" else "111111"
     for _ in range(auth_api.CODE_ATTEMPTS):
-        await client.post("/api/auth/register", json={"email": "brute@example.com", "code": wrong, "password": "secret-123", "organization": org})
+        await client.post("/api/auth/register", json={"email": "brute@example.com", "code": wrong, "password": "secret-123", **PERSON})
     # even the right code does not help now: brute force over a million codes is cut at a few tries
-    r = await client.post("/api/auth/register", json={"email": "brute@example.com", "code": code, "password": "secret-123", "organization": org})
+    r = await client.post("/api/auth/register", json={"email": "brute@example.com", "code": code, "password": "secret-123", **PERSON})
     assert r.status_code == 400 and "Запросите новый код" in r.json()["detail"]
 
 

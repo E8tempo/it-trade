@@ -1,23 +1,29 @@
 """A client's account: the organizations the user works for.
 
-An organization is registered with its first user, who becomes its owner (the head); more organizations can be
-added later. A manager checks each one in the admin panel and enters its contracts with the shop; its people see
-prices and order only once it is approved. One record per company: an ИНН (+ КПП) already registered is refused,
-its head adds more people. Changing the requisites of a checked organization sends it for a check again.
+A client registers as a private person and buys as one; whoever adds an organization becomes its owner (the head).
+The form finds its requisites by ИНН in the state registers (GET /company). A manager checks each organization in
+the admin panel and enters its contracts with the shop; its people buy for it, at its prices, only once it is
+approved, and from then on it is the one they buy for unless they choose otherwise (app/api/cart.py: find_buyer).
+One record per company: an ИНН (+ КПП) already registered is refused, its head adds more people. Changing the
+requisites of a checked organization sends it for a check again.
 """
 
 import re
+import time
+from collections import defaultdict, deque
 from datetime import datetime
 from typing import Annotated, Self
 
-from fastapi import APIRouter, HTTPException, Path, Response, status
+from fastapi import APIRouter, HTTPException, Path, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.cart import choose_buyer
 from app.api.deps import CurrentUser, Session
 from app.api.schemas import ContractRef
+from app.companies import LookupUnavailable, configured, find_company
 from app.models import Contract, MemberRole, Organization, OrganizationMember, OrganizationStatus, User
 from app.models.organizations import KPP_RE, valid_inn, valid_ogrn
 
@@ -160,14 +166,50 @@ async def check_not_registered(session: AsyncSession, inn: str, kpp: str | None,
 async def create_organization(session: AsyncSession, user: User, body: OrganizationIn) -> Organization:
     """A new organization headed by the user, for a manager to check. The caller commits."""
     await check_not_registered(session, body.inn, body.kpp)
-    if user.id is not None:  # a new user (registration) has none yet
-        mine = select(Organization.id).join(OrganizationMember).where(OrganizationMember.user_id == user.id, same_company(body.inn, body.kpp))
-        if await session.scalar(mine.limit(1)) is not None:
-            raise HTTPException(409, "Эта организация уже есть в вашем кабинете")
+    mine = select(Organization.id).join(OrganizationMember).where(OrganizationMember.user_id == user.id, same_company(body.inn, body.kpp))
+    if await session.scalar(mine.limit(1)) is not None:
+        raise HTTPException(409, "Эта организация уже есть в вашем кабинете")
     org = Organization(**body.model_dump(), status=OrganizationStatus.pending, contracts=[], members=[])
     org.members.append(OrganizationMember(user_id=user.id, role=MemberRole.owner))
     session.add(org)
     return org
+
+
+# lookups of a user by ИНН, per API process: the registers' service is limited per day
+LOOKUPS, LOOKUP_WINDOW = 30, 15 * 60
+_lookups: defaultdict[int, deque[float]] = defaultdict(deque)
+
+
+def _check_lookups(user_id: int) -> None:
+    now = time.monotonic()
+    q = _lookups[user_id]
+    while q and now - q[0] > LOOKUP_WINDOW:
+        q.popleft()
+    if len(q) >= LOOKUPS:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Слишком много запросов, попробуйте позже")
+    q.append(now)
+
+
+@router.get("/company")
+async def company(inn: Annotated[str, Query(pattern=r"^\d{10}(\d{2})?$")], user: CurrentUser, session: Session) -> dict:
+    """The new organization form's lookup of a company by ИНН. `configured`: false without a DaData key (the form
+    asks for the requisites by hand, as it does when the lookup fails); `registered`: the company is a client
+    already; `mine`: it is in the user's account already."""
+    _check_lookups(user.id)
+    try:
+        found = await find_company(inn)
+        available = True
+    except LookupUnavailable:
+        found, available = None, False
+    kpp = found.kpp if found else None
+    mine = select(Organization.id).join(OrganizationMember).where(OrganizationMember.user_id == user.id, same_company(inn, kpp))
+    return {
+        "configured": configured(),
+        "available": available,
+        "company": found.as_dict() if found else None,
+        "registered": await is_registered(session, inn, kpp),
+        "mine": await session.scalar(mine.limit(1)) is not None,
+    }
 
 
 @router.get("/organizations", response_model=list[MyOrganizationOut])
@@ -185,11 +227,13 @@ async def my_organizations(user: CurrentUser, session: Session, response: Respon
 
 @router.post("/organizations", response_model=MyOrganizationOut, status_code=status.HTTP_201_CREATED)
 async def add_organization(body: OrganizationIn, user: CurrentUser, session: Session):
-    """Adds another organization headed by the user, for a manager to check."""
+    """Adds an organization headed by the user, for a manager to check. It becomes the user's choice on the cart:
+    they buy for it as soon as it is approved, and as before until then."""
     count = await session.scalar(select(func.count()).select_from(OrganizationMember).where(OrganizationMember.user_id == user.id)) or 0
     if count >= MAX_ORGANIZATIONS:
         raise HTTPException(409, f"Можно добавить не больше {MAX_ORGANIZATIONS} организаций")
     org = await create_organization(session, user, body)
+    await choose_buyer(session, user.id, org)
     await session.commit()
     return MyOrganizationOut.mine(org, user)
 

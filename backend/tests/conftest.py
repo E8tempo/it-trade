@@ -63,6 +63,7 @@ OUTBOX: list[tuple[str, str, str]] = []
 @pytest.fixture(autouse=True)
 def mail_and_throttle(monkeypatch):
     """Letters go to OUTBOX instead of SMTP; the per-address attempt limits start afresh in every test."""
+    import app.api.account as account_api
     import app.api.auth as auth_api
 
     async def send(to, subject, text, html=None):
@@ -70,6 +71,7 @@ def mail_and_throttle(monkeypatch):
 
     monkeypatch.setattr(auth_api, "send_mail", send)
     auth_api._failures.clear()
+    account_api._lookups.clear()
     yield
     OUTBOX.clear()
 
@@ -81,13 +83,24 @@ async def signup_code(client: httpx.AsyncClient, email: str) -> str:
     return re.search(r"\b(\d{6})\b", next(t for to, _, t in reversed(OUTBOX) if to == email.strip().lower())).group(1)
 
 
-async def register(client: httpx.AsyncClient, email: str, password: str = "secret-123", organization: dict | None = None, **fields) -> dict:
-    """Registers a client with an organization of their own (a fresh ИНН unless given); the response's JSON."""
-    org = organization or {"name": f"ООО «{email.split('@')[0]}»", "inn": company_inn(next(_inn_seq))}
+PERSON = {"name": "Иван", "last_name": "Петров", "phone": "+7 978 000-00-00"}
+
+
+async def register(client: httpx.AsyncClient, email: str, password: str = "secret-123", organization: dict | bool | None = None, **fields) -> dict:
+    """Registers a client (a private person) and adds an organization of theirs, a fresh ИНН unless given
+    (`organization=False`: none); the registration's JSON."""
     code = fields.pop("code", None) or await signup_code(client, email)
-    r = await client.post("/api/auth/register", json={"email": email, "code": code, "password": password, "organization": org, **fields})
+    r = await client.post("/api/auth/register", json={"email": email, "code": code, "password": password, **PERSON, **fields})
     assert r.status_code == 201, r.text
+    if organization is not False:
+        org = organization or {"name": f"ООО «{email.split('@')[0]}»", "inn": company_inn(next(_inn_seq))}
+        added = await client.post("/api/account/organizations", json=org, headers=auth(r.json()["access_token"]))
+        assert added.status_code == 201, added.text
     return r.json()
+
+
+def auth(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
 
 
 async def approve(email: str) -> int:

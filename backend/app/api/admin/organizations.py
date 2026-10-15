@@ -35,7 +35,7 @@ class Person(BaseModel):
 
     @classmethod
     def of(cls, u: User) -> "Person":
-        return cls(id=u.id, email=u.email, name=u.name, phone=u.phone)
+        return cls(id=u.id, email=u.email, name=u.full_name, phone=u.phone)
 
 
 class Member(Person):

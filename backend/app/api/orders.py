@@ -1,9 +1,10 @@
 """Checkout and the client's orders.
 
-The order is made of the cart's lines at the server's prices: the wholesale prices of the cart's organization for
-the chosen payment method. The order keeps the organization's requisites and the chosen contract as they are at
-checkout. An organization's owner sees all its orders, a purchaser their own. Clients never see supplier prices,
-margins, manager notes or the notes and authors of the history: only the status changes.
+The order is made of the cart's lines at the server's prices for the chosen payment method: the wholesale prices of
+the cart's organization, or the retail ones when the user buys as a private person. An organization's order keeps
+its requisites and the chosen contract as they are at checkout. An organization's owner sees all its orders, a
+purchaser their own. Clients never see supplier prices, margins, manager notes or the notes and authors of the
+history: only the status changes.
 """
 
 import time
@@ -39,10 +40,9 @@ from app.models import (
     User,
 )
 from app.models.base import utcnow
-from app.models.catalog import VISIBLE_STATUSES, price_type
+from app.models.catalog import VISIBLE_STATUSES
 from app.models.orders import FINAL_STATUSES, normalize_phone
 from app.models.organizations import buyer_snapshot
-from app.pricing import B2B_AUDIENCE
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
@@ -61,7 +61,8 @@ class CheckoutIn(BaseModel):
     address: str | None = Field(None, max_length=512)
     comment: str | None = Field(None, max_length=2000)
     payment_method: PaymentMethod
-    # one of the active contracts of the cart's organization, or None for the manager to settle
+    # one of the active contracts of the cart's organization, or None for the manager to settle (always None for a
+    # private person)
     contract_id: int | None = Field(None, ge=1, le=MAX_ID)
     # the total the customer saw: if the prices have changed since, the order is not placed
     expected_total: Decimal | None = Field(None, ge=0, lt=10**10)
@@ -95,7 +96,7 @@ class CustomerOrderListItem(BaseModel):
     total: float
     items_count: int
     payment_method: PaymentMethod
-    buyer_name: str | None  # the organization it was bought for
+    buyer_name: str | None  # the organization it was bought for; None: as a private person
 
 
 class CustomerOrderOut(BaseModel):
@@ -111,7 +112,7 @@ class CustomerOrderOut(BaseModel):
     address: str | None
     comment: str | None
     payment_method: PaymentMethod
-    buyer: OrderBuyer | None  # the organization it was bought for
+    buyer: OrderBuyer | None  # the organization it was bought for; None: as a private person
     items_total: float
     delivery_price: float
     discount: float
@@ -185,8 +186,9 @@ async def _out(session: AsyncSession, o: Order) -> CustomerOrderOut:
 
 @router.post("", response_model=CustomerOrderOut, status_code=status.HTTP_201_CREATED)
 async def place_order(body: CheckoutIn, request: Request, response: Response, session: Session, user: CurrentUser):
-    """Places the order of the cart for its organization and empties the cart. 409 when the cart is empty, has
-    lines that cannot be ordered or its total is no longer `expected_total`: the client reads the cart again."""
+    """Places the order of the cart for its organization (or the user as a private person) and empties the cart. 409
+    when the cart is empty, has lines that cannot be ordered or its total is no longer `expected_total`: the client
+    reads the cart again."""
     ip = client_ip(request)
     _check_throttle(ip)
     if body.delivery == DeliveryMethod.transport and not body.city:
@@ -203,9 +205,9 @@ async def place_order(body: CheckoutIn, request: Request, response: Response, se
     contract = None
     if body.contract_id is not None:
         contract = await session.get(Contract, body.contract_id)
-        if contract is None or contract.organization_id != org.id or not contract.is_active:
+        if org is None or contract is None or contract.organization_id != org.id or not contract.is_active:
             raise HTTPException(409, "Договор недоступен. Выберите другой или оформите заказ без договора.")
-    lines = await priced_lines(session, cart, B2B_AUDIENCE)
+    lines = await priced_lines(session, cart, b.audience)
     if not lines:
         raise HTTPException(409, "Корзина пуста")
     if any(line.problem(payment) for line in lines):
@@ -240,10 +242,10 @@ async def place_order(body: CheckoutIn, request: Request, response: Response, se
         address=body.address if body.delivery != DeliveryMethod.pickup else None,
         comment=body.comment,
         payment_method=payment,
-        price_type=price_type(B2B_AUDIENCE, payment),
-        organization_id=org.id,
+        price_type=b.price_type(payment),
+        organization_id=org.id if org else None,
         contract_id=contract.id if contract else None,
-        buyer=buyer_snapshot(org, contract),
+        buyer=buyer_snapshot(org, contract) if org else None,
         delivery_price=Decimal(0),
         discount=Decimal(0),
         items=items,
@@ -252,7 +254,7 @@ async def place_order(body: CheckoutIn, request: Request, response: Response, se
     author = (body.customer_name or body.email or phone)[:255]
     o.events.append(OrderEvent(status=OrderStatus.new, note="Заказ оформлен на сайте", author_id=user.id, author=author))
     # remembered for the next checkout
-    if not user.name:
+    if not user.name and not user.last_name:
         user.name = body.customer_name
     if not user.phone:
         user.phone = body.phone

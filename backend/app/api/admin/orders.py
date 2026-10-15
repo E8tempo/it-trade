@@ -31,7 +31,7 @@ from app.models.orders import FINAL_STATUSES, normalize_phone
 router = APIRouter()
 # for the order history
 PAYMENT_LABELS = {PaymentMethod.cash: "наличные", PaymentMethod.cashless: "безналичный расчёт"}
-AUDIENCE_LABELS = {Audience.retail: "розница", Audience.wholesale: "опт"}
+AUDIENCE_LABELS = {Audience.retail: "физ. лица", Audience.wholesale: "опт"}
 
 
 class OrderItemIn(BaseModel):
@@ -222,7 +222,7 @@ async def _items(session: Session, items: list[OrderItemIn], t: PriceType) -> li
 
 
 def author_name(admin) -> str:
-    return admin.name or admin.email
+    return admin.full_name or admin.email
 
 
 @router.get("/orders", response_model=OrderPage)
