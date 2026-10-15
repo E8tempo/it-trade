@@ -4,6 +4,7 @@ import {
   ArrowUpToLine,
   Calculator,
   ChartNoAxesColumn,
+  CircleCheck,
   Coins,
   Copy,
   Ellipsis,
@@ -39,7 +40,7 @@ import { money } from "@/lib/admin/labels";
 import { PRICE_TYPE, PRICE_TYPES } from "@/lib/admin/suppliers";
 import type { AdminCategory, PriceImpact, PriceRules, PriceType, SupplierPricing } from "@/lib/admin/types";
 import { api } from "@/lib/api/client";
-import { formatNumber } from "@/lib/format";
+import { formatNumber, pluralize } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
@@ -304,9 +305,25 @@ export function PricingEditor({
                 <Mini label="Подорожают" value={formatNumber(shown.up)} />
                 <Mini label="Подешевеют" value={formatNumber(shown.down)} />
               </div>
-              <p>
-                Средняя наценка: {shown.avg_markup_before}% → <b>{shown.avg_markup_after}%</b>
-              </p>
+              {shown.changed === 0 && (
+                <div className="flex gap-2.5 rounded-xl bg-emerald-500/10 px-3 py-2.5 text-emerald-900 ring-1 ring-emerald-500/25">
+                  <CircleCheck className="mt-0.5 size-4 shrink-0" />
+                  <p>
+                    {dirty
+                      ? "Эти правила ничего не меняют: цены уже такие, какими они их сделали бы."
+                      : "Всё в порядке: сохранённые правила уже применены, все цены посчитаны по ним."}
+                    <span className="block text-xs opacity-80">
+                      Прогноз показывает, что изменится, если сохранить правила этой вкладки. Поменяйте их — и он покажет разницу.
+                    </span>
+                  </p>
+                </div>
+              )}
+              <div>
+                <p>
+                  Средняя наценка: {shown.avg_markup_before}% → <b>{shown.avg_markup_after}%</b>
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{markupNote(draft, shown)}</p>
+              </div>
               {shown.examples.length > 0 && (
                 <ul className="max-h-72 divide-y overflow-y-auto rounded-xl ring-1 ring-foreground/10">
                   {shown.examples.map((e) => (
@@ -432,6 +449,18 @@ function NumberInput({
       <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-sm text-muted-foreground">{unit}</span>
     </div>
   );
+}
+
+/** Why the average markup is above the one set: rounding up, the RRP, the minimum markup, own category markups. */
+function markupNote(d: Draft, impact: PriceImpact): string {
+  const reasons = [`цены округляются вверх ${roundingLabel(d.round_to)}`];
+  if (impact.by_rrp) reasons.push(`у ${formatNumber(impact.by_rrp)} ${pluralize(impact.by_rrp, ["товара", "товаров", "товаров"])} стоит РРЦ поставщика`);
+  if (d.min_markup > 0) reasons.push(`наценка не меньше ${money(d.min_markup)}`);
+  if (Object.keys(d.category_markups).length) reasons.push("у части категорий своя наценка");
+  const fixed = impact.fixed
+    ? ` ${formatNumber(impact.fixed)} ${pluralize(impact.fixed, ["товар", "товара", "товаров"])} с ценой, зафиксированной вручную, не учитываются.`
+    : "";
+  return `Считается по готовым ценам, поэтому может отличаться от ${formatNumber(d.markup_percent)}%: ${reasons.join(", ")}.${fixed}`;
 }
 
 function Mini({ label, value }: { label: string; value: string }) {
