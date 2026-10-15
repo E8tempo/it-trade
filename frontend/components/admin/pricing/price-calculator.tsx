@@ -36,7 +36,7 @@ export function PriceCalculator({
   supplier?: string;
   disabled?: boolean; // the rules being tried are not valid
 }) {
-  const [picked, setPicked] = useState<PriceType>("retail_cash");
+  const [picked, setPicked] = useState<PriceType>(PRICE_TYPES[0].value);
   const [supplierPrice, setSupplierPrice] = useState("10000");
   const [rrp, setRrp] = useState("");
   const [category, setCategory] = useState<string>("none");

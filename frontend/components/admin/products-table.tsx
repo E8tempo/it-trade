@@ -34,7 +34,7 @@ export function ProductsTable({ products }: { products: AdminProduct[] }) {
               {t.short}
             </TableHead>
           ))}
-          <TableHead className="text-right" title="Наценка розничной цены за наличные над закупкой">
+          <TableHead className="text-right" title="Наценка оптовой цены по безналу над закупкой">
             Наценка
           </TableHead>
           <TableHead className="text-right">Остаток</TableHead>
@@ -116,7 +116,7 @@ function ProductRow({ product }: { product: AdminProduct }) {
             <TooltipContent>Фиксированная цена: наценки на неё не действуют</TooltipContent>
           </Tooltip>
         )}
-        <span className={cn("tabular-nums", t.value === "retail_cash" && "font-medium")}>{money(value)}</span>
+        <span className={cn("tabular-nums", t.value === "wholesale_cashless" && "font-medium")}>{money(value)}</span>
         <Button
           variant="ghost"
           size="icon-xs"

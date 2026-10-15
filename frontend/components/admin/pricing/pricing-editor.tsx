@@ -12,7 +12,6 @@ import {
   Percent,
   SlidersHorizontal,
   Tag,
-  TriangleAlert,
   Undo2,
   type LucideIcon,
 } from "lucide-react";
@@ -37,10 +36,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { apiErrorText } from "@/lib/admin/errors";
 import { money } from "@/lib/admin/labels";
-import { PRICE_TYPE, PRICE_TYPES, priceType } from "@/lib/admin/suppliers";
+import { PRICE_TYPE, PRICE_TYPES } from "@/lib/admin/suppliers";
 import type { AdminCategory, PriceImpact, PriceRules, PriceType, SupplierPricing } from "@/lib/admin/types";
 import { api } from "@/lib/api/client";
-import { formatNumber, pluralize } from "@/lib/format";
+import { formatNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
@@ -79,9 +78,7 @@ const ROUNDING_STEPS = [1, 10, 50, 100];
 const DIALOG = "max-h-[calc(100dvh-2rem)] gap-5 overflow-y-auto p-5 sm:max-w-xl sm:p-6";
 const DIALOG_FOOT = "-mx-5 -mb-5 rounded-b-xl px-5 sm:-mx-6 sm:-mb-6 sm:px-6";
 
-const HINT: Record<PriceType, string> = {
-  retail_cash: "Розничная цена за наличные. Сайт работает только с бизнесом, поэтому клиентам она не видна: она для справки и заказов из админки, по ней сортируется каталог «по цене».",
-  retail_cashless: "Розничная цена по безналу. Клиентам на сайте не видна: она для справки и заказов из админки.",
+const HINT: Partial<Record<PriceType, string>> = {
   wholesale_cash: "Цена для клиентов при оплате наличными: её видят сотрудники подтверждённой организации во всём каталоге.",
   wholesale_cashless: "Цена для клиентов по безналу (по счёту на организацию): её видят сотрудники подтверждённой организации.",
 };
@@ -110,7 +107,7 @@ export function PricingEditor({
   const [busy, setBusy] = useState<"impact" | "save" | null>(null);
   const [dialog, setDialogState] = useState<"impact" | "calculator" | "categories" | null>(null);
   const [refreshing, startRefresh] = useTransition();
-  const { label, audience, payment } = PRICE_TYPE[type];
+  const { label } = PRICE_TYPE[type];
   const saved = toDraft(pricing[type]);
   const dirty = !sameRules(draft, saved);
   const invalid = !validRules(draft); // NaN >= 0 is false: an empty field is invalid too
@@ -310,18 +307,6 @@ export function PricingEditor({
               <p>
                 Средняя наценка: {shown.avg_markup_before}% → <b>{shown.avg_markup_after}%</b>
               </p>
-              {audience === "wholesale" && shown.above_retail != null && shown.above_retail > 0 && (
-                <div className="flex gap-2.5 rounded-xl bg-amber-500/10 px-3 py-2.5 text-amber-900 ring-1 ring-amber-500/25">
-                  <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-                  <p>
-                    У {formatNumber(shown.above_retail)} {pluralize(shown.above_retail, ["товара", "товаров", "товаров"])} оптовая цена выше
-                    розничной
-                    <span className="block text-xs opacity-80">
-                      По этим правилам, в сравнении с нынешней ценой «{PRICE_TYPE[priceType("retail", payment)].label}».
-                    </span>
-                  </p>
-                </div>
-              )}
               {shown.examples.length > 0 && (
                 <ul className="max-h-72 divide-y overflow-y-auto rounded-xl ring-1 ring-foreground/10">
                   {shown.examples.map((e) => (
@@ -355,7 +340,7 @@ export function PricingEditor({
           <DialogHeader>
             <DialogTitle className="text-lg font-semibold">Калькулятор цены «{label}»</DialogTitle>
             <DialogDescription>
-              Считает по правилам этой вкладки, даже если они ещё не сохранены. Остальные три цены — по сохранённым правилам.
+              Считает по правилам этой вкладки, даже если они ещё не сохранены. Другая цена — по сохранённым правилам.
             </DialogDescription>
           </DialogHeader>
           <PriceCalculator categories={categories} supplier={supplier} priceType={type} settings={draft} disabled={invalid} />
