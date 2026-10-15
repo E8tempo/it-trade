@@ -3,7 +3,7 @@
 import { LoaderCircle } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import { errorMessage, hasStatus } from "@/components/shop/errors";
 import { Field, FIELD, FormError, PasswordInput } from "@/components/shop/form";
@@ -87,16 +87,6 @@ export function LoginForm() {
         Войти
       </Button>
     </form>
-  );
-}
-
-/** «Зарегистрируйтесь» / «Войти» under a form, keeping ?next=. Reads the URL: render inside <Suspense>. */
-export function AuthSwitchLink({ to, children }: { to: "/login" | "/register"; children: ReactNode }) {
-  const next = safeNext(useSearchParams().get("next"), "");
-  return (
-    <Link href={authHref(to, next || null)} className="font-medium text-primary hover:underline">
-      {children}
-    </Link>
   );
 }
 

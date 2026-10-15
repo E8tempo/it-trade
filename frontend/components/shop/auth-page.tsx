@@ -1,8 +1,7 @@
 import { BadgePercent, FileSignature, PackageCheck, type LucideIcon } from "lucide-react";
-import Link from "next/link";
 import { Suspense, type ReactNode } from "react";
 
-import { AuthSwitchLink, AuthTabs } from "@/components/shop/auth-forms";
+import { AuthTabs } from "@/components/shop/auth-forms";
 import { SITE_NAME } from "@/lib/site";
 
 const POINTS: [LucideIcon, string, string][] = [
@@ -22,12 +21,10 @@ export function AuthPage({
   children,
 }: {
   page: "/login" | "/register";
-  title: string;
-  lead: string;
+  title?: string; // the registration form has a heading of its own per step
+  lead?: string;
   children: ReactNode;
 }) {
-  const [question, action, other] =
-    page === "/login" ? ["Нет аккаунта?", "Зарегистрируйте организацию", "/register" as const] : ["Уже есть аккаунт?", "Войдите", "/login" as const];
   return (
     // the card's top stays put on wide screens: the tabs do not move when the two pages differ in height
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-6 sm:px-6 sm:py-10 lg:flex-row lg:items-start lg:gap-14 lg:pt-[max(3rem,14vh)]">
@@ -63,21 +60,9 @@ export function AuthPage({
         <Suspense fallback={<div className="h-10" />}>
           <AuthTabs active={page} />
         </Suspense>
-        <h1 className="mt-7 text-[26px] leading-tight font-semibold tracking-tight">{title}</h1>
-        <p className="mt-2 text-[15px] leading-relaxed text-muted-foreground">{lead}</p>
-        <div className="mt-7">{children}</div>
-        <p className="mt-6 text-center text-sm text-muted-foreground">
-          {question}{" "}
-          <Suspense
-            fallback={
-              <Link href={other} className="font-medium text-primary hover:underline">
-                {action}
-              </Link>
-            }
-          >
-            <AuthSwitchLink to={other}>{action}</AuthSwitchLink>
-          </Suspense>
-        </p>
+        {title && <h1 className="mt-7 text-[26px] leading-tight font-semibold tracking-tight">{title}</h1>}
+        {lead && <p className="mt-2 text-[15px] leading-relaxed text-muted-foreground">{lead}</p>}
+        <div className={title ? "mt-7" : "mt-6"}>{children}</div>
       </section>
     </div>
   );

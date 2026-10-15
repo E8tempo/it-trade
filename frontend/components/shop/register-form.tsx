@@ -1,5 +1,6 @@
 "use client";
 
+import { REGEXP_ONLY_DIGITS } from "input-otp";
 import { ArrowLeft, ArrowRight, Building2, LoaderCircle, PencilLine, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
@@ -12,6 +13,7 @@ import { authHref, nextFromLocation } from "@/components/shop/next-url";
 import { useSession } from "@/components/shop/session-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InputOTP, InputOTPGroup, InputOTPSeparator, InputOTPSlot } from "@/components/ui/input-otp";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
@@ -42,9 +44,19 @@ const NO_ORG: Org = { name: "", kpp: "", ogrn: "", address: "" };
 type RegisterField = "inn" | "org" | "kpp" | "name" | "phone" | "email" | "password" | "code";
 const STEP_FIELDS: RegisterField[][] = [["inn"], ["org", "kpp"], ["name", "phone"], ["email", "password"], ["code"]];
 const CODE_STEP = 4;
+// under each step's heading (the code step names the address instead)
+const LEADS = [
+  "Для компаний и ИП. По ИНН найдём организацию и подставим реквизиты.",
+  null,
+  "Менеджер позвонит, чтобы подтвердить организацию.",
+  "E-mail станет логином, на него придёт код.",
+  null,
+];
 const CODE_TTL_MS = 15 * 60_000; // as the backend's CODE_TTL: a code sent earlier is still good
 
 /** The code sent to an address (POST /api/auth/register/code). */
+const OTP_SLOT = "size-12 text-xl font-semibold first:rounded-l-xl last:rounded-r-xl sm:size-13";
+
 type SentCode = { email: string; at: number; resendAt: number };
 
 /**
@@ -64,6 +76,7 @@ export function RegisterForm() {
   const [error, setError] = useState<ReactNode>(null);
   const [pending, setPending] = useState(false);
   const [sent, setSent] = useState<SentCode | null>(null);
+  const [code, setCode] = useState("");
   const [now, setNow] = useState(0); // ticks while a resend waits
   const formRef = useRef<HTMLFormElement>(null);
   const focusStep = useRef(false);
@@ -74,7 +87,7 @@ export function RegisterForm() {
   const found = lookup?.result?.company ?? null;
   const confirming = step === 1 && !!found && !manual;
   const registered = !!lookup?.result?.registered;
-  const titles = ["Организация", confirming ? "Это ваша организация?" : "Реквизиты", "Контактное лицо", "Вход в кабинет", "Код из письма"];
+  const titles = ["Ваша организация", confirming ? "Это ваша организация?" : "Реквизиты организации", "Контактное лицо", "Вход в кабинет", "Подтвердите почту"];
   const resendIn = sent ? Math.max(0, Math.ceil((sent.resendAt - now) / 1000)) : 0;
 
   // the countdown to another code
@@ -117,7 +130,7 @@ export function RegisterForm() {
       email: emailError(text(data, "email").trim(), true),
       password:
         password.length < PASSWORD_MIN ? `Пароль должен быть не короче ${PASSWORD_MIN} символов` : password.length > 128 ? "Слишком длинный пароль" : undefined,
-      code: /^\d{6}$/.test(text(data, "code").trim()) ? undefined : "Код — 6 цифр из письма",
+      code: /^\d{6}$/.test(code) ? undefined : "Введите 6 цифр из письма",
     };
   }
 
@@ -162,10 +175,9 @@ export function RegisterForm() {
       setSent({ email: r.email, at, resendAt: at + r.resend_in * 1000 });
       setNow(at);
       setErrors((prev) => ({ ...prev, code: undefined }));
-      const input = formRef.current?.querySelector<HTMLInputElement>('[name="code"]');
-      if (input) input.value = "";
+      setCode("");
       if (step !== CODE_STEP) goTo(CODE_STEP);
-      else input?.focus();
+      else formRef.current?.querySelector<HTMLInputElement>('[name="code"]')?.focus();
     } catch (err) {
       if (hasStatus(err, 409)) {
         setError(alreadyRegistered());
@@ -206,7 +218,7 @@ export function RegisterForm() {
     try {
       await register({
         email: text(data, "email").trim(),
-        code: text(data, "code").trim(),
+        code,
         password: text(data, "password"),
         name: text(data, "name").trim(),
         phone: text(data, "phone").trim(),
@@ -228,7 +240,8 @@ export function RegisterForm() {
         setError(alreadyRegistered());
       } else if (hasStatus(err, 400) && message) {
         setErrors((prev) => ({ ...prev, code: message })); // a wrong or expired code
-        formRef.current?.querySelector<HTMLInputElement>('[name="code"]')?.select();
+        setCode("");
+        formRef.current?.querySelector<HTMLInputElement>('[name="code"]')?.focus();
       } else if (hasStatus(err, 422)) {
         setError(message || "Проверьте данные: сервер их не принял.");
       } else {
@@ -248,23 +261,27 @@ export function RegisterForm() {
   return (
     <form ref={formRef} method="post" noValidate onSubmit={onSubmit} className="space-y-5">
       <div>
-        <div className="flex items-baseline justify-between gap-3 text-sm">
-          <span className="font-semibold">{titles[step]}</span>
-          <span className="shrink-0 text-muted-foreground tabular-nums">
-            Шаг {step + 1} из {titles.length}
-          </span>
-        </div>
-        <div className="mt-2 grid grid-cols-5 gap-1.5" aria-hidden>
+        <div className="grid grid-cols-5 gap-1.5" aria-hidden>
           {titles.map((t, i) => (
             <span key={i} className={cn("h-1 rounded-full transition-colors duration-300", i <= step ? "bg-primary" : "bg-muted")} />
           ))}
         </div>
+        <p className="mt-5 text-[13px] text-muted-foreground tabular-nums">
+          Регистрация · шаг {step + 1} из {titles.length}
+        </p>
+        <h1 className="mt-1 text-[24px] leading-tight font-semibold tracking-tight">{titles[step]}</h1>
+        {LEADS[step] && <p className="mt-1.5 text-[15px] leading-relaxed text-muted-foreground">{LEADS[step]}</p>}
+        {step === CODE_STEP && sent && (
+          <p className="mt-1.5 text-[15px] leading-relaxed text-muted-foreground">
+            Отправили 6 цифр на <span className="font-medium break-all text-foreground">{sent.email}</span>
+          </p>
+        )}
       </div>
 
       {/* 1. ИНН */}
       <fieldset hidden={step !== 0} className="space-y-4">
         <legend className="sr-only">ИНН организации</legend>
-        <Field id="reg-inn" label="ИНН" error={errors.inn} hint="10 цифр у организации, 12 у ИП. Название, КПП и адрес подставим сами">
+        <Field id="reg-inn" label="ИНН" error={errors.inn} hint="10 цифр у организации, 12 у ИП">
           <Input
             name="inn"
             inputMode="numeric"
@@ -354,7 +371,7 @@ export function RegisterForm() {
         <Field id="reg-name" label="Имя" error={errors.name}>
           <Input name="name" autoComplete="name" maxLength={255} className={FIELD} {...describedBy("reg-name", errors.name)} />
         </Field>
-        <Field id="reg-phone" label="Телефон" error={errors.phone} hint="По нему менеджер подтвердит организацию">
+        <Field id="reg-phone" label="Телефон" error={errors.phone}>
           <Input
             name="phone"
             type="tel"
@@ -371,7 +388,7 @@ export function RegisterForm() {
       {/* 4. the login */}
       <fieldset hidden={step !== 3} className="space-y-4">
         <legend className="sr-only">Вход в кабинет</legend>
-        <Field id="reg-email" label="E-mail" error={errors.email} hint="Логин для входа">
+        <Field id="reg-email" label="E-mail" error={errors.email}>
           <Input
             name="email"
             type="email"
@@ -392,41 +409,56 @@ export function RegisterForm() {
       {/* 5. the code sent to the e-mail */}
       <fieldset hidden={step !== CODE_STEP} className="space-y-4">
         <legend className="sr-only">Код из письма</legend>
-        <p className="text-sm text-muted-foreground">
-          Мы отправили код на <span className="font-medium text-foreground">{sent?.email}</span>. Письмо приходит за минуту; если его нет,
-          загляните в «Спам».
-        </p>
-        <Field id="reg-code" label="Код из письма" error={errors.code}>
-          <Input
+        <div className="flex flex-col items-center gap-2">
+          <InputOTP
             name="code"
+            maxLength={6}
+            pattern={REGEXP_ONLY_DIGITS}
             inputMode="numeric"
             autoComplete="one-time-code"
-            maxLength={6}
-            placeholder="••••••"
-            onChange={(e) => {
-              const digits = e.target.value.replace(/\D/g, "").slice(0, 6);
-              e.target.value = digits;
+            value={code}
+            onChange={(v) => {
+              setCode(v);
               if (errors.code) setErrors((prev) => ({ ...prev, code: undefined }));
-              // all six typed or pasted: on at once
-              if (digits.length === 6 && !pending) formRef.current?.requestSubmit();
             }}
-            className={`${FIELD} text-center text-xl font-semibold tracking-[0.5em] tabular-nums placeholder:tracking-[0.3em]`}
-            {...describedBy("reg-code", errors.code)}
-          />
-        </Field>
-        <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-          <button type="button" onClick={() => goTo(3)} className="text-muted-foreground hover:text-foreground">
-            Изменить e-mail
-          </button>
-          <button
-            type="button"
-            disabled={resendIn > 0 || pending}
-            onClick={() => void sendCode(true)}
-            className="font-medium text-primary hover:underline disabled:font-normal disabled:text-muted-foreground disabled:no-underline"
+            // all six typed or pasted: on at once
+            onComplete={() => !pending && formRef.current?.requestSubmit()}
+            aria-label="Код из письма"
+            aria-invalid={errors.code ? true : undefined}
+            aria-describedby={errors.code ? "reg-code-error" : undefined}
           >
-            {resendIn > 0 ? `Отправить снова через ${resendIn} с` : "Отправить код снова"}
-          </button>
+            <InputOTPGroup>
+              {[0, 1, 2].map((i) => (
+                <InputOTPSlot key={i} index={i} aria-invalid={errors.code ? true : undefined} className={OTP_SLOT} />
+              ))}
+            </InputOTPGroup>
+            <InputOTPSeparator className="px-1 text-muted-foreground" />
+            <InputOTPGroup>
+              {[3, 4, 5].map((i) => (
+                <InputOTPSlot key={i} index={i} aria-invalid={errors.code ? true : undefined} className={OTP_SLOT} />
+              ))}
+            </InputOTPGroup>
+          </InputOTP>
+          {errors.code && (
+            <p id="reg-code-error" className="text-center text-[13px] text-destructive">
+              {errors.code}
+            </p>
+          )}
         </div>
+        <p className="text-center text-sm text-muted-foreground">
+          Не пришло? Проверьте «Спам» или{" "}
+          {resendIn > 0 ? (
+            <span className="tabular-nums">отправьте снова через {resendIn} с</span>
+          ) : (
+            <button type="button" disabled={pending} onClick={() => void sendCode(true)} className="font-medium text-primary hover:underline">
+              отправьте снова
+            </button>
+          )}
+          .{" "}
+          <button type="button" onClick={() => goTo(3)} className="font-medium text-primary hover:underline">
+            Другой e-mail
+          </button>
+        </p>
       </fieldset>
 
       {error && <FormError>{error}</FormError>}
