@@ -1,11 +1,24 @@
 import { pluralize } from "@/lib/format";
-import type { CartProblem, ContractRef, DeliveryMethod, OrderStatus, OrganizationStatus, PaymentMethod } from "@/lib/types";
+import type { Cart, CartProblem, ContractRef, DeliveryMethod, OrderStatus, OrganizationStatus, PaymentMethod, User } from "@/lib/types";
 
 /** Payment methods as customers see them. */
 export const PAYMENT: Record<PaymentMethod, { title: string; hint: string }> = {
   cash: { title: "Наличными", hint: "при получении заказа" },
   cashless: { title: "Безналичный расчёт", hint: "по счёту на организацию" },
 };
+
+/** The cashless hint of a private person: no invoice to an organization. */
+export const PERSON_CASHLESS_HINT = "картой или переводом";
+
+/** «Иван Петров»; null while neither name is known. */
+export function fullName(u: Pick<User, "name" | "last_name">): string | null {
+  return [u.name, u.last_name].filter(Boolean).join(" ") || null;
+}
+
+/** Whom the cart's prices are for, after «для»: «ООО «Ромашка»» or «физ. лица». */
+export function buyerFor(cart: Pick<Cart, "organization">): string {
+  return cart.organization ? cart.organization.name : "физ. лица";
+}
 
 export const PAYMENT_METHODS: PaymentMethod[] = ["cash", "cashless"];
 

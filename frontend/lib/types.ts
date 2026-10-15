@@ -86,7 +86,15 @@ export type PriceType = `${Audience}_${PaymentMethod}`;
 export type DeliveryMethod = "pickup" | "courier" | "transport";
 export type OrderStatus = "new" | "confirmed" | "ordered" | "ready" | "shipped" | "completed" | "cancelled";
 
-export type User = { id: number; email: string; name: string | null; phone: string | null; role: string };
+export type User = {
+  id: number;
+  email: string;
+  /** the first name (a full one for accounts made before the last name was asked) */
+  name: string | null;
+  last_name: string | null;
+  phone: string | null;
+  role: string;
+};
 
 /** Response of login, register, refresh and password change; the tokens are also set as httpOnly cookies. */
 export type AuthTokens = {
@@ -124,9 +132,10 @@ export type CartItem = {
 export type CartBuyer = { id: number; name: string; inn: string };
 
 export type Cart = {
+  /** wholesale for an organization, retail for a private person */
   audience: Audience;
-  /** the organization the cart (and every price on the site) is for */
-  organization: CartBuyer;
+  /** the organization the cart (and every price on the site) is for; null: the user as a private person */
+  organization: CartBuyer | null;
   payment: PaymentMethod;
   price_type: PriceType;
   items: CartItem[];

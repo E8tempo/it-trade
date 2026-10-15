@@ -13,6 +13,7 @@ import {
   Percent,
   SlidersHorizontal,
   Tag,
+  TriangleAlert,
   Undo2,
   type LucideIcon,
 } from "lucide-react";
@@ -324,6 +325,15 @@ export function PricingEditor({
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">{markupNote(draft, shown)}</p>
               </div>
+              {!!shown.above_retail && (
+                <div className="flex gap-2.5 rounded-xl bg-amber-500/10 px-3 py-2.5 text-amber-900 ring-1 ring-amber-500/25">
+                  <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                  <p>
+                    У {formatNumber(shown.above_retail)} {pluralize(shown.above_retail, ["товара", "товаров", "товаров"])} оптовая цена станет выше цены
+                    для физ. лиц с той же оплатой. Обычно это ошибка в правилах: организации не должны платить больше частных покупателей.
+                  </p>
+                </div>
+              )}
               {shown.examples.length > 0 && (
                 <ul className="max-h-72 divide-y overflow-y-auto rounded-xl ring-1 ring-foreground/10">
                   {shown.examples.map((e) => (

@@ -15,15 +15,15 @@ import { toast } from "sonner";
 
 import { errorMessage } from "@/components/shop/errors";
 import { api, ApiError, refreshTokens } from "@/lib/api/client";
-import type { AuthTokens, Cart, CartItem, Organization, OrganizationInput, PaymentMethod, User } from "@/lib/types";
+import type { AuthTokens, Cart, CartItem, Organization, PaymentMethod, User } from "@/lib/types";
 
 // The visitor's session, organizations and cart, shared by the header, the side panel, product
 // cards and the pages. They are per-user data, so they are fetched here, in the browser: catalog
-// pages rendered on the server stay the same for everyone and can be cached. The site sells to
-// businesses only: prices, the cart and orders are for people of an approved organization.
+// pages rendered on the server stay the same for everyone and can be cached. A signed-in client
+// buys as a private person or for an approved organization of theirs (the cart says which).
 
-/** guest: not signed in; pending: no approved organization yet; client: sees prices and orders. */
-export type Access = "loading" | "guest" | "pending" | "client";
+/** guest: not signed in; client: sees prices and orders. */
+export type Access = "loading" | "guest" | "client";
 
 // Whether the visitor was signed in last time, for the first paint: the root layout's script puts
 // it on <html data-auth> before the page shows, so the home page and the side panel of a client do
@@ -71,7 +71,8 @@ const serverPayment = (): PaymentMethod => "cash";
 
 // --- contexts --------------------------------------------------------------------------------
 
-export type RegisterData = { email: string; code: string; password: string; name: string | null; phone: string | null; organization: OrganizationInput };
+export type RegisterData = { email: string; code: string; password: string; name: string; last_name: string; phone: string };
+export type ProfileData = { name: string | null; last_name: string | null; phone: string | null };
 export type CartLineInput = { sku: number; qty: number };
 
 type SessionValue = {
@@ -85,7 +86,7 @@ type SessionValue = {
   register: (data: RegisterData) => Promise<User>;
   /** Ends this session (or all of them) and reloads the page. */
   logout: (options?: { everywhere?: boolean }) => Promise<void>;
-  saveProfile: (data: { name: string | null; phone: string | null }) => Promise<User>;
+  saveProfile: (data: ProfileData) => Promise<User>;
   /** a new password confirmed with the code sent to the user's e-mail (POST /api/auth/password/code) */
   changePassword: (code: string, next: string) => Promise<void>;
   /** Call before a request made on the user's behalf; false if the session turned out to be over. */
@@ -114,8 +115,9 @@ type CartValue = {
   setQty: (sku: number, qty: number) => void;
   remove: (sku: number) => void;
   clear: () => Promise<Cart>;
-  /** Which of the user's approved organizations the cart (and every price on the site) is for. */
-  setBuyer: (organizationId: number) => Promise<Cart>;
+  /** Which of the user's approved organizations the cart (and every price on the site) is for; null: the user as a
+   * private person. */
+  setBuyer: (organizationId: number | null) => Promise<Cart>;
   refresh: () => Promise<void>;
 };
 
@@ -295,7 +297,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const remove = useCallback((sku: number) => setQty(sku, 0), [setQty]);
 
   const setBuyer = useCallback(
-    (organizationId: number) =>
+    (organizationId: number | null) =>
       mutate(() => send("/api/cart/organization", { method: "PUT", body: JSON.stringify({ organization_id: organizationId }) })),
     [mutate, send],
   );
@@ -349,7 +351,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   );
 
   const saveProfile = useCallback(
-    async (data: { name: string | null; phone: string | null }) => {
+    async (data: ProfileData) => {
       await keepSession();
       const u = await api<User>("/api/auth/me", { method: "PATCH", body: JSON.stringify(data) });
       setUser(u);
@@ -387,13 +389,22 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (userId !== undefined) refreshOrganizations().catch(() => undefined);
   }, [userId, refreshOrganizations]);
 
-  const canBuy = !!organizations?.some((o) => o.status === "approved");
-  const access: Access = sessionLoading ? "loading" : !user ? "guest" : organizations === null ? "loading" : canBuy ? "client" : "pending";
+  const canBuy = !!user;
+  const access: Access = sessionLoading ? "loading" : !user ? "guest" : "client";
   const canBuyRef = useRef(false);
   useEffect(() => {
     canBuyRef.current = canBuy;
     if (canBuy) load().catch(() => undefined);
   }, [canBuy, load]);
+
+  // An organization approved (or no longer) may change whom the cart is for: read it again.
+  const approved = organizations?.filter((o) => o.status === "approved").map((o) => o.id).join(",");
+  const approvedRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const before = approvedRef.current;
+    approvedRef.current = approved;
+    if (canBuyRef.current && before !== undefined && approved !== undefined && before !== approved) load().catch(() => undefined);
+  }, [approved, load]);
 
   useEffect(() => {
     let alive = true;
@@ -465,7 +476,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const cartValue = useMemo<CartValue>(
     () => ({
-      // only a client has a cart; until the organizations are known it is still loading
+      // only a signed-in client has a cart
       cart: canBuy ? cart : null,
       loading: access === "loading" || (canBuy && cartLoading),
       error: cartError,

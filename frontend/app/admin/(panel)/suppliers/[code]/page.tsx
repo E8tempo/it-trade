@@ -68,7 +68,8 @@ async function SupplierContent({ params, searchParams }: Props) {
     <>
       <p className="mb-6 max-w-3xl text-sm text-muted-foreground">
         В каталоге {countLabel(supplier.products)}, в наличии {formatNumber(supplier.in_stock)}. Цены на сайте считаются из закупочных
-        цен поставщика. Сайт продаёт оптом: у товара две цены — за наличные и по безналу, — и у каждой свои правила. Пересчёт идёт
+        цен поставщика. У товара четыре цены — опт для организаций и для физ. лиц, каждая за наличные и по безналу, — и у каждой свои
+        правила. Пересчёт идёт
         сразу после сохранения и при каждом обновлении остатков. Подробно — в разделе{" "}
         <Link href="/admin/docs/pricing" className="text-primary hover:underline">
           «Как считается цена»

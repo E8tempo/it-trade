@@ -5,7 +5,7 @@ import { AuthTabs } from "@/components/shop/auth-forms";
 import { SITE_NAME } from "@/lib/site";
 
 const POINTS: [LucideIcon, string, string][] = [
-  [BadgePercent, "Оптовые цены", "Цены вашей организации — за наличные и по безналу — во всём каталоге"],
+  [BadgePercent, "Оптовые цены", "Добавьте организацию — после проверки весь каталог по оптовым ценам, за наличные и по безналу"],
   [FileSignature, "Работа по договору", "Договоры с предоплатой или отсрочкой, счёт на организацию"],
   [PackageCheck, "Заказы онлайн", "Корзина, история заказов и их статусы в кабинете"],
 ];
@@ -37,7 +37,7 @@ export function AuthPage({
           Оптовые поставки для бизнеса в Крыму
         </h2>
         <p className="mt-2 text-[15px] text-white/80 lg:mt-4 lg:max-w-md lg:text-base">
-          Компьютерная техника, электроника и товары для бизнеса — для компаний и ИП.
+          Компьютерная техника, электроника и товары для бизнеса — для компаний, ИП и частных покупателей.
         </p>
         <ul className="mt-10 hidden max-w-md space-y-5 lg:block">
           {POINTS.map(([Icon, head, text]) => (

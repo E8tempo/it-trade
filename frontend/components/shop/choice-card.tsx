@@ -2,7 +2,7 @@
 
 import { useId, type ReactNode } from "react";
 
-import { PAYMENT, PAYMENT_METHODS } from "@/components/shop/labels";
+import { PAYMENT, PAYMENT_METHODS, PERSON_CASHLESS_HINT } from "@/components/shop/labels";
 import { formatPrice } from "@/lib/format";
 import type { PaymentMethod } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -54,16 +54,18 @@ export function ChoiceCard<T extends string>({ name, value, checked, onSelect, t
   );
 }
 
-/** Cash / cashless, each with the order's total for it. */
+/** Cash / cashless, each with the order's total for it; `person`: a private person pays cashless without an invoice. */
 export function PaymentChoice({
   value,
   onChange,
   totals,
+  person,
   className,
 }: {
   value: PaymentMethod;
   onChange: (payment: PaymentMethod) => void;
   totals: Record<PaymentMethod, number> | null;
+  person?: boolean;
   className?: string;
 }) {
   // unique: pages kept alive for back navigation stay in the document with their radios
@@ -78,7 +80,7 @@ export function PaymentChoice({
           checked={value === m}
           onSelect={onChange}
           title={PAYMENT[m].title}
-          hint={PAYMENT[m].hint}
+          hint={person && m === "cashless" ? PERSON_CASHLESS_HINT : PAYMENT[m].hint}
           aside={totals ? formatPrice(totals[m]) : undefined}
         />
       ))}

@@ -11,9 +11,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { PAYMENT, SOURCE } from "@/lib/admin/labels";
+import { AUDIENCE, PAYMENT, SOURCE } from "@/lib/admin/labels";
 import { PRICE_TYPE, priceType } from "@/lib/admin/suppliers";
-import type { Order, OrderSource, PaymentMethod } from "@/lib/admin/types";
+import type { Audience, Order, OrderSource, PaymentMethod } from "@/lib/admin/types";
 import { apiErrorText } from "@/lib/admin/errors";
 import { api } from "@/lib/api/client";
 
@@ -32,16 +32,18 @@ export function NewOrderForm() {
   const [delivery, setDelivery] = useState(0);
   const [discount, setDiscount] = useState(0);
   const [payment, setPayment] = useState<PaymentMethod>("cashless");
+  const [audience, setAudience] = useState<Audience>("wholesale");
   const [source, setSource] = useState<OrderSource>("phone");
   const [note, setNote] = useState("");
   const [pending, setPending] = useState(false);
-  // the shop sells wholesale only: the payment method picks the price
-  const type = priceType("wholesale", payment);
+  // whose prices (an organization's wholesale ones or a private person's) and the payment method pick the price
+  const type = priceType(audience, payment);
 
   // Lines picked from the catalog take the new type's price, unless their price was changed by hand.
-  function changeType(nextPayment: PaymentMethod) {
-    const next = priceType("wholesale", nextPayment);
+  function changeType(nextAudience: Audience, nextPayment: PaymentMethod) {
+    const next = priceType(nextAudience, nextPayment);
     setLines((ls) => ls.map((l) => (l.prices && l.price === (l.prices[type] ?? 0) ? { ...l, price: l.prices[next] ?? 0 } : l)));
+    setAudience(nextAudience);
     setPayment(nextPayment);
   }
 
@@ -64,7 +66,7 @@ export function NewOrderForm() {
           manager_note: note || null,
           source,
           payment_method: payment,
-          audience: "wholesale",
+          audience,
           delivery_price: delivery,
           discount,
           items: lines.map((l) => ({ sku: l.sku, qty: l.qty, price: l.price })),
@@ -91,20 +93,36 @@ export function NewOrderForm() {
       </div>
       <div className="space-y-6">
         <Panel title="Оплата и цены">
-          <Field label="Оплата">
-            <Select items={PAYMENT} value={payment} onValueChange={(v) => v && changeType(v as PaymentMethod)}>
-              <SelectTrigger className="h-9 w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(PAYMENT).map(([k, label]) => (
-                  <SelectItem key={k} value={k}>
-                    {label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
+          <div className="space-y-3">
+            <Field label="Цены">
+              <Select items={AUDIENCE} value={audience} onValueChange={(v) => v && changeType(v as Audience, payment)}>
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(AUDIENCE).map(([k, label]) => (
+                    <SelectItem key={k} value={k}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Оплата">
+              <Select items={PAYMENT} value={payment} onValueChange={(v) => v && changeType(audience, v as PaymentMethod)}>
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(PAYMENT).map(([k, label]) => (
+                    <SelectItem key={k} value={k}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
           <p className="mt-3 text-xs text-muted-foreground">
             Товары добавляются по цене «{PRICE_TYPE[type].label}» из каталога; цену можно изменить для этого заказа.
           </p>

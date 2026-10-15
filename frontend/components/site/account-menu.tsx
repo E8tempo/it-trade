@@ -1,11 +1,12 @@
 "use client";
 
-import { Lock, LogOut, UserRound } from "lucide-react";
+import { LogOut, UserRound } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 
 import { errorMessage } from "@/components/shop/errors";
+import { fullName } from "@/components/shop/labels";
 import { authHref } from "@/components/shop/next-url";
 import { useSession } from "@/components/shop/session-provider";
 import { CartButton } from "@/components/site/cart-button";
@@ -19,7 +20,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * The right of the header. A guest: «Войти» (coming back to this page) and «Стать клиентом». A client: the cart,
- * and a menu with their sections (the side panel's, for phones); on phones also the organization switch.
+ * and a menu with their sections (the side panel's, for phones); on phones also the switch of whom they buy as.
  */
 export function AccountMenu() {
   const { user, access, logout } = useSession();
@@ -46,35 +47,29 @@ export function AccountMenu() {
   }
 
   const firstName = user.name?.trim().split(/\s+/)[0];
+  const name = fullName(user);
   return (
     <>
       <span className="lg:hidden">
         <OrgSwitcher variant="icon" />
       </span>
-      {access === "client" && <CartButton />}
+      <CartButton />
       <DropdownMenu>
-        <DropdownMenuTrigger className={HEADER_ACTION} aria-label={`Кабинет: ${user.name || user.email}`}>
+        <DropdownMenuTrigger className={HEADER_ACTION} aria-label={`Кабинет: ${name || user.email}`}>
           <UserRound className="size-5" />
           <span className="hidden max-w-28 truncate lg:inline">{firstName || "Кабинет"}</span>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" sideOffset={8} className="w-64 rounded-xl p-1.5">
           <div className="px-2.5 pt-1.5 pb-2">
-            <p className="truncate text-sm font-medium">{user.name || "Кабинет"}</p>
+            <p className="truncate text-sm font-medium">{name || "Кабинет"}</p>
             <p className="truncate text-xs text-muted-foreground">{user.email}</p>
           </div>
           <DropdownMenuSeparator />
-          {CLIENT_NAV.filter((i) => i.href && i.href !== "/catalog").map(({ href, label, icon, clientOnly }) =>
-            clientOnly && access !== "client" ? (
-              <DropdownMenuItem key={label} disabled className="gap-2.5 rounded-lg px-2.5 py-2">
-                <Lock className="text-muted-foreground" />
-                {label}
-              </DropdownMenuItem>
-            ) : (
-              <MenuLink key={label} href={href!} icon={icon}>
-                {label}
-              </MenuLink>
-            ),
-          )}
+          {CLIENT_NAV.filter((i) => i.href && i.href !== "/catalog").map(({ href, label, icon }) => (
+            <MenuLink key={label} href={href!} icon={icon}>
+              {label}
+            </MenuLink>
+          ))}
           <DropdownMenuSeparator />
           <DropdownMenuItem
             className="gap-2.5 rounded-lg px-2.5 py-2"

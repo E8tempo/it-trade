@@ -33,7 +33,8 @@ export default function ProductsPage({ searchParams }: Props) {
         title="Товары и цены"
         description={
           <>
-            Сайт продаёт оптом: у товара две цены — за наличные и по безналу. Каждая считается от закупочной цены по{" "}
+            У товара четыре цены: опт для организаций и цены для физ. лиц, каждая за наличные и по безналу. Каждая считается от закупочной
+            цены по{" "}
             <Link href={`/admin/suppliers/${DEFAULT_SUPPLIER}`} className="text-primary hover:underline">
               правилам поставщика
             </Link>

@@ -29,7 +29,7 @@ import { useQuote, type QuoteApi } from "@/components/account/quotes/use-quote";
 import { ACCOUNT_CARD, CARD_HEAD, Pill } from "@/components/account/ui";
 import { ProductImage } from "@/components/catalog/product-image";
 import { errorMessage, hasStatus } from "@/components/shop/errors";
-import { PROBLEM } from "@/components/shop/labels";
+import { buyerFor, PROBLEM } from "@/components/shop/labels";
 import { useCart, useSession } from "@/components/shop/session-provider";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -121,7 +121,7 @@ function HeaderActions({ quote }: { quote: Quote }) {
         (c) => {
           const missed = c.not_added.length;
           toast.success(missed ? `В корзине. Не добавлено: ${countLabel(missed)}` : "Товары КП в корзине", {
-            description: c.organization.id !== quote.organization_id ? `Корзина — для ${c.organization.name}` : undefined,
+            description: c.organization?.id !== quote.organization_id ? `Корзина — для ${buyerFor(c)}` : undefined,
             action: { label: "Корзина", onClick: () => router.push("/cart") },
           });
         },
