@@ -88,7 +88,7 @@ def test_requisites_check_digits():
     assert not valid_ogrn("1027700132196") and not valid_ogrn("304500116000158") and not valid_ogrn("12345")
 
 
-async def test_registration_with_an_organization(browser):
+async def test_registration_with_an_organization(client, admin, browser):
     ivan = browser()
     user = (await register(ivan, "ivan@example.com", organization={**COMPANY, "inn": " 7707 083 893 ", "address": "  "}, name="Иван"))["user"]
     assert user["email"] == "ivan@example.com"
@@ -114,7 +114,18 @@ async def test_registration_with_an_organization(browser):
     for fields, message in cases:
         r = await other.post("/api/auth/register", json={**base, **fields})
         assert r.status_code == 422 and (message is None or message in r.text), fields
-    # one record per company: the same ИНН and КПП, or a missing КПП, is refused
+    # Someone else's request for the same company is accepted while ivan's is not checked: whoever registers
+    # a company's ИНН first does not lock the company out. Only one of them can be approved.
+    squatter = browser()
+    await register(squatter, "squatter@example.com", organization=COMPANY)
+    (fake,) = await orgs_of(squatter)
+    detail = (await client.get(f"/api/admin/organizations/{org['id']}", headers=admin)).json()
+    assert [(o["id"], o["status"], o["owner"]["email"]) for o in detail["same_company"]] == [(fake["id"], "pending", "squatter@example.com")]
+    await review(client, admin, org["id"], "approved")
+    r = await client.post(f"/api/admin/organizations/{fake['id']}/review", json={"status": "approved"}, headers=admin)
+    assert r.status_code == 409 and f"№ {org['id']}" in r.json()["detail"]
+    await review(client, admin, fake["id"], "rejected", "Не ваша организация")
+    # the company is a client now: the same ИНН and КПП, or a missing КПП, is refused
     for org in (COMPANY, {**COMPANY, "kpp": None}, {"name": "Другое имя", "inn": "7707083893"}):
         r = await other.post("/api/auth/register", json={**base, "organization": org})
         assert r.status_code == 409 and r.json()["detail"] == account_api.ALREADY_REGISTERED
@@ -131,8 +142,8 @@ async def test_client_manages_organizations(client, admin, browser):
     anna = browser()
     await register(anna, "anna@example.com", organization=fresh(name="ООО «Анна»"))
     (first,) = await orgs_of(anna)
-    r = await anna.post("/api/account/organizations", json={"name": "ИП Анна", "inn": "500100732259"})
-    assert r.status_code == 409  # registered by trader@ in the previous test
+    r = await anna.post("/api/account/organizations", json={"name": "Снова Анна", "inn": first["inn"], "kpp": first["kpp"]})
+    assert r.status_code == 409 and "уже есть в вашем кабинете" in r.json()["detail"]
     second = (await anna.post("/api/account/organizations", json=fresh(name="ООО «Второе»", kpp=None))).json()
     assert (second["status"], second["role"], second["kpp"]) == ("pending", "owner", None)
     assert [o["name"] for o in await orgs_of(anna)] == ["ООО «Анна»", "ООО «Второе»"]

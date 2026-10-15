@@ -160,10 +160,20 @@ async def test_company_lookup_by_inn(client, monkeypatch):
     assert r["available"] and r["company"]["name"] == "ООО «Лес»" and r["registered"] is False
     assert (await client.get("/api/auth/company", params={"inn": company_inn(7778)})).json()["company"] is None
 
-    # a client already: the form says so before the rest is filled in
+    # a request that is not checked yet does not count; an approved organization is a client, and the form says
+    # so before the rest is filled in
     org = {"name": "ООО «Лес»", "inn": inn, "kpp": "910201001"}
     assert (await client.post("/api/auth/register", json={"email": "les@example.com", "password": "secret-123", "organization": org})).status_code == 201
     client.cookies.clear()
+    assert (await client.get("/api/auth/company", params={"inn": inn})).json()["registered"] is False
+    from sqlalchemy import update
+
+    from app.db import SessionLocal
+    from app.models import Organization, OrganizationStatus
+
+    async with SessionLocal() as session:
+        await session.execute(update(Organization).where(Organization.inn == inn).values(status=OrganizationStatus.approved))
+        await session.commit()
     assert (await client.get("/api/auth/company", params={"inn": inn})).json()["registered"] is True
 
 

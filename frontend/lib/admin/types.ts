@@ -396,6 +396,8 @@ export type AdminOrganization = OrganizationInput & {
   members: Member[];
   contracts: Contract[];
   orders: OrderListItem[]; // the latest ones placed for it
+  // other requests for the same company (ИНН, and КПП unless one has none): only one can be approved
+  same_company: { id: number; name: string; kpp: string | null; status: OrganizationStatus; owner: Person | null }[];
 };
 
 // --- news and promotions (backend/app/api/admin/posts.py) ----------------------------------------
