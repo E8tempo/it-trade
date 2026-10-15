@@ -32,6 +32,7 @@ from app.models.catalog import VISIBLE_STATUSES, ImageStatus
 from app.site_settings import SITE_RPS_MIN, ImageSettings, ShopSettings, SyncSettings, get_settings_obj
 from app.supplier.client import IMAGE_RPS_LIMIT
 from app.sync.images import LIST_BATCH
+from app.version import code_fingerprint
 from app.worker import HEARTBEAT_EVERY, RETRY, RETRY_AFTER, TRIAL, WORKER, scheduled_at
 from app.worker import jobs as worker_jobs
 
@@ -317,20 +318,24 @@ def _error_text(error: str) -> str:
 
 def _next_sync(names: tuple[str, ...], jobs: dict[str, JobState], cfg: SyncSettings, now: datetime) -> dict[str, Any]:
     """When the worker runs a sync next (for the timers on the page); a group (the category tree, then the
-    catalog) is described by its first job that is not done."""
+    catalog) is described by its first job that is not done. "due": its time has come, the worker takes it
+    within half a minute, or after the job it is running now (`after`)."""
     by_name = {j.name: j for j in worker_jobs()}
     states = [jobs.get(n) for n in names]
     last = min((st.last_success_at for st in states if st and st.last_success_at), default=None)
+    busy = next((SYNC_JOBS[j.name] for j in jobs.values() if j.name in SYNC_JOBS and _job_running(j)), None)
+    out = {"last_success_at": last, "busy": None}
     if any(_job_running(st) for st in states):
-        return {"state": "running", "next_at": None, "last_success_at": last}
+        return {**out, "state": "running", "next_at": None}
     if failed := next((st for st in states if _job_failed(st)), None):
-        at = now if failed.info.get(RETRY) else max(now, failed.last_started_at + RETRY_AFTER)
-        return {"state": "retry", "next_at": at, "last_success_at": last}
+        at = now if failed.info.get(RETRY) else failed.last_started_at + RETRY_AFTER
+        return {**out, "state": "due" if at <= now else "retry", "next_at": at, "busy": busy}
     job, st = by_name[names[0]], states[0]
     dep = jobs.get(job.after) if job.after else None
     if st is None or st.last_started_at is None or (job.after and not (dep and dep.last_success_at)):
-        return {"state": "waiting", "next_at": None, "last_success_at": last}
-    return {"state": "scheduled", "next_at": max(now, scheduled_at(job, st, now, cfg)), "last_success_at": last}
+        return {**out, "state": "waiting", "next_at": None}
+    at = scheduled_at(job, st, now, cfg)
+    return {**out, "state": "due" if at <= now else "scheduled", "next_at": at, "busy": busy}
 
 
 def _sync_stage(key: str, jobs: dict[str, JobState], detail: str) -> dict[str, Any]:
@@ -375,6 +380,8 @@ def _worker(st: JobState | None, now: datetime) -> dict[str, Any]:
         "heartbeat": beat,
         "started_at": st.last_started_at if st else None,
         "activity": info.get("activity"),
+        # started before the code changed (an older worker without the fingerprint counts as one too)
+        "outdated": info.get("code") != code_fingerprint(),
         "image_workers": info.get("image_workers"),
         "cpus": info.get("cpus"),
     }
@@ -444,6 +451,14 @@ async def _checks(session, jobs, worker, trial, cfg: ImageSettings, left_bytes: 
         add("worker", "Воркер", "error", "Воркер ещё ни разу не запускался", "docker compose up -d worker")
     elif not worker["alive"]:
         add("worker", "Воркер", "error", f"Воркер не отвечает {_ago(worker['heartbeat'])}", "docker compose logs worker")
+    elif worker["outdated"]:
+        add(
+            "worker",
+            "Воркер",
+            "warn",
+            "Воркер запущен со старым кодом: код изменился после его запуска, новые настройки и исправления он не видит",
+            "Перезапустите воркер: docker compose restart worker (в разработке dev.sh перезапускает его сам)",
+        )
     else:
         add("worker", "Воркер", "ok", f"Работает {_ago(worker['started_at'], suffix='')}; процессов обработки фото: {worker['image_workers']}")
 

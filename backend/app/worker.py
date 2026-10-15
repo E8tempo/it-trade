@@ -27,6 +27,7 @@ from app.sync.categories import sync_categories
 from app.sync.images import next_pending, pick_trial, process_one, sync_image_lists
 from app.sync.products import sync_products
 from app.sync.stock import sync_stock
+from app.version import code_fingerprint
 
 log = logging.getLogger("worker")
 RETRY_AFTER = timedelta(minutes=10)
@@ -250,6 +251,7 @@ async def heartbeat(stop: asyncio.Event, state: dict) -> None:
     """Tells the admin panel that the worker runs and what it does (job_state row "worker")."""
     s = get_settings()
     started = utcnow()
+    code = code_fingerprint()  # the code this process runs, whatever changes on disk later
     async with SessionLocal() as session:
         # a trial cut short by a restart is not resumed: a new one can be started
         trial = await session.get(JobState, TRIAL)
@@ -266,6 +268,7 @@ async def heartbeat(stop: asyncio.Event, state: dict) -> None:
                 "pid": os.getpid(),
                 "cpus": os.cpu_count(),
                 "image_workers": s.image_workers,
+                "code": code,
                 **{k: v for k, v in state.items() if k != "queue_changed"},
             }
             session.add(st)

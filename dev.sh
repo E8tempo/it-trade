@@ -81,7 +81,8 @@ run() {
 export FORCE_COLOR=1 PYTHONUNBUFFERED=1
 
 run api 34 "$BACKEND" "$PY" -m uvicorn app.main:app --reload --port 8000
-[[ $WORKER == 1 ]] && run worker 35 "$BACKEND" "$PY" -m app.worker
+# the worker restarts when the backend code changes, as the API does with --reload
+[[ $WORKER == 1 ]] && run worker 35 "$BACKEND" "$BACKEND/.venv/bin/watchfiles" --filter python "$PY -m app.worker" app
 run web 32 "$FRONTEND" npm run dev
 
 say "Сайт: http://localhost:3000  Админка: http://localhost:3000/admin  Swagger: http://localhost:8000/api/docs"

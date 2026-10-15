@@ -244,9 +244,11 @@ export type SyncSettings = {
 
 /** The next run of a supplier sync, for the timers on the loading page. */
 export type SyncTimer = {
-  state: "scheduled" | "running" | "retry" | "waiting";
+  // due: its time has come; the worker takes it within half a minute, or after the sync it runs now (`busy`)
+  state: "scheduled" | "due" | "running" | "retry" | "waiting";
   next_at: string | null;
   last_success_at: string | null;
+  busy: string | null;
 };
 
 export type CheckStatus = "ok" | "warn" | "error" | "wait";
@@ -310,6 +312,7 @@ export type Loading = {
     heartbeat: string | null;
     started_at: string | null;
     activity: "starting" | "photos" | "idle" | "paused" | "trial" | null;
+    outdated: boolean; // started before the backend code changed: restart it
     image_workers: number | null;
     cpus: number | null;
   };

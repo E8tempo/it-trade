@@ -7,6 +7,8 @@
 @custom-variant authed (&:where([data-auth="user"] *));
 
 @theme inline {
+  /* a bar of unknown length: a stripe running across (a sync in progress) */
+  --animate-indeterminate: indeterminate 1.4s ease-in-out infinite;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-sans);
@@ -158,5 +160,14 @@
   h2,
   h3 {
     text-wrap: balance;
+  }
+}
+
+@keyframes indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
   }
 }
