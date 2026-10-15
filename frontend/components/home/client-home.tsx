@@ -150,10 +150,10 @@ function ClientTiles({ orders, organizations }: { orders: CustomerOrderPage | nu
             <LayoutGrid className="size-4" />
             Каталог
           </Link>
-          <span className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-background/10 px-3 text-sm opacity-70" title="Скоро">
+          <Link href="/account/quotes" className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-background/15 px-3 text-sm font-medium hover:bg-background/25">
             <FileText className="size-4" />
-            КП — скоро
-          </span>
+            КП для клиента
+          </Link>
         </div>
       </div>
     </div>

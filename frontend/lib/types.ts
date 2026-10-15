@@ -268,3 +268,113 @@ export type Post = {
   /** a promotion's last day, YYYY-MM-DD */
   ends_on: string | null;
 };
+
+// --- commercial offers a client makes for their customers (backend/app/api/quotes.py) ----------
+
+/** What a client's offers print besides the organization's requisites, and the defaults of a new offer. */
+export type QuoteProfile = {
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+  bank_name: string | null;
+  bik: string | null;
+  account: string | null;
+  corr_account: string | null;
+  signer_title: string | null;
+  signer_name: string | null;
+  markup_percent: number;
+  vat_rate: number | null;
+  /** a new offer is valid for so many days */
+  valid_days: number | null;
+  terms: string | null;
+};
+
+export type QuoteProfileOut = QuoteProfile & { can_edit: boolean };
+
+export type QuoteSeller = OrganizationInput & {
+  profile: QuoteProfile;
+  author_name: string | null;
+  author_email: string | null;
+  author_phone: string | null;
+};
+
+/** fixed: typed in; rrp: the supplier's RRP; markup: the client's markup over what they pay us */
+export type PriceSource = "fixed" | "rrp" | "markup";
+
+export type QuoteLine = {
+  id: number;
+  /** null: the client's own line (installation, delivery) */
+  sku: number | null;
+  name: string;
+  vendor: string | null;
+  part: string | null;
+  unit: string;
+  qty: number;
+  slug: string | null;
+  image: ProductImage | null;
+  /** what the client pays us per unit, as when the line was added or the prices refreshed */
+  cost: number | null;
+  rrp: number | null;
+  /** the line's own markup; null: the offer's */
+  markup_percent: number | null;
+  /** a selling price typed in */
+  price: number | null;
+  sale_price: number | null;
+  price_source: PriceSource | null;
+  total: number | null;
+  profit: number | null;
+  /** what the client would pay us now */
+  current_cost: number | null;
+  stock: number;
+  problem: CartProblem | null;
+};
+
+export type QuoteTotals = {
+  total: number;
+  cost: number;
+  profit: number;
+  vat: number | null;
+  units: number;
+  unpriced: number;
+  changed: number;
+  problems: number;
+};
+
+export type Quote = {
+  id: number;
+  number: number;
+  organization_id: number;
+  title: string | null;
+  customer: string | null;
+  customer_contact: string | null;
+  payment: PaymentMethod;
+  markup_percent: number;
+  use_rrp: boolean;
+  /** selling prices are rounded up to: 0 kopecks, 1 rouble, 10, 100 */
+  round_to: number;
+  vat_rate: number | null;
+  /** YYYY-MM-DD */
+  valid_until: string | null;
+  terms: string | null;
+  show_photos: boolean;
+  created_at: string;
+  updated_at: string;
+  seller: QuoteSeller;
+  items: QuoteLine[];
+  totals: QuoteTotals;
+};
+
+export type QuoteListItem = {
+  id: number;
+  number: number;
+  title: string | null;
+  customer: string | null;
+  organization_name: string;
+  author_name: string | null;
+  created_at: string;
+  updated_at: string;
+  lines: number;
+  total: number;
+};
+
+export type QuotePage = { items: QuoteListItem[]; total: number; page: number; per_page: number };
