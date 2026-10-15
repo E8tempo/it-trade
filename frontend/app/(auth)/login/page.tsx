@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: "Вход", robots: { index: false } 
 
 export default function LoginPage() {
   return (
-    <AuthPage title="Вход" lead="Кабинет клиента: оптовые цены вашей организации, корзина, заказы и их статусы." switchTo="/register">
+    <AuthPage page="/login" title="Вход в кабинет" lead="Оптовые цены вашей организации, корзина, заказы и их статусы.">
       <LoginForm />
     </AuthPage>
   );

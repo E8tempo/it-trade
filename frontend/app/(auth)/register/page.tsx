@@ -8,9 +8,10 @@ export const metadata: Metadata = { title: "Регистрация", robots: { i
 export default function RegisterPage() {
   return (
     <AuthPage
-      title="Регистрация компании"
-      lead="Оптовые цены, договоры с отсрочкой, история заказов — для компаний и ИП. Менеджер проверит организацию в рабочее время, и цены откроются."
-      switchTo="/login"
+      page="/register"
+      wide
+      title="Регистрация организации"
+      lead="Для компаний и ИП. Менеджер проверит организацию в рабочее время — после этого откроются цены и заказы."
     >
       <RegisterForm />
     </AuthPage>

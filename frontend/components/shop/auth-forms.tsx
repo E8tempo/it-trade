@@ -22,6 +22,7 @@ import { authHref, nextFromLocation, safeNext } from "@/components/shop/next-url
 import { useSession } from "@/components/shop/session-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 
 const SUBMIT = "h-11 w-full gap-2 rounded-xl text-[15px]";
 
@@ -182,7 +183,7 @@ export function RegisterForm() {
   }
 
   return (
-    <form method="post" noValidate onSubmit={onSubmit} className="space-y-6">
+    <form method="post" noValidate onSubmit={onSubmit} className="grid grid-cols-1 gap-x-8 gap-y-6 md:grid-cols-2">
       <fieldset className="space-y-4">
         <legend className="mb-3 text-sm font-semibold">Организация</legend>
         <Field id="reg-inn" label="ИНН" error={errors.inn} hint="10 цифр у организации, 12 у ИП">
@@ -240,8 +241,12 @@ export function RegisterForm() {
           <PasswordInput name="password" autoComplete="new-password" required {...describedBy("reg-password", errors.password, true)} />
         </Field>
       </fieldset>
-      {error && <FormError>{error}</FormError>}
-      <Button type="submit" className={SUBMIT} disabled={pending}>
+      {error && (
+        <div className="md:col-span-2">
+          <FormError>{error}</FormError>
+        </div>
+      )}
+      <Button type="submit" className={cn(SUBMIT, "md:col-span-2")} disabled={pending}>
         {pending && <LoaderCircle className="animate-spin" />}
         Зарегистрировать организацию
       </Button>
@@ -256,5 +261,31 @@ export function AuthSwitchLink({ to, children }: { to: "/login" | "/register"; c
     <Link href={authHref(to, next || null)} className="font-medium text-primary hover:underline">
       {children}
     </Link>
+  );
+}
+
+/** «Вход | Регистрация» at the top of the card, keeping ?next=. Reads the URL: render inside <Suspense>. */
+export function AuthTabs({ active }: { active: "/login" | "/register" }) {
+  const next = safeNext(useSearchParams().get("next"), "");
+  const tabs = [
+    ["/login", "Вход"],
+    ["/register", "Регистрация"],
+  ] as const;
+  return (
+    <nav className="grid grid-cols-2 rounded-xl bg-muted p-1 text-sm font-medium" aria-label="Вход или регистрация">
+      {tabs.map(([href, label]) => (
+        <Link
+          key={href}
+          href={authHref(href, next || null)}
+          aria-current={href === active ? "page" : undefined}
+          className={cn(
+            "rounded-lg px-3 py-2 text-center transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+            href === active ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {label}
+        </Link>
+      ))}
+    </nav>
   );
 }

@@ -78,6 +78,8 @@ type SessionValue = {
   user: User | null;
   /** until the first answer of /api/auth/me */
   loading: boolean;
+  /** the API said there is no session (401); not when it could not be reached */
+  signedOut: boolean;
   refresh: () => Promise<void>;
   login: (email: string, password: string) => Promise<User>;
   register: (data: RegisterData) => Promise<User>;
@@ -137,6 +139,7 @@ const PRIVATE_PATH = /^\/(account|cart|checkout)(\/|$)/;
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [user, setUserState] = useState<User | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
+  const [signedOut, setSignedOut] = useState(false);
   // loaded for this user: after a sign-out or another sign-in they no longer apply
   const [orgs, setOrgs] = useState<{ userId: number; list: Organization[] } | null>(null);
   const organizations = orgs && orgs.userId === user?.id ? orgs.list : null;
@@ -156,9 +159,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   // --- session -------------------------------------------------------------------------------
 
+  // null only ever comes from a 401: the session is over
   const setUser = useCallback((u: User | null) => {
     userRef.current = u;
     setUserState(u);
+    setSignedOut(u === null);
   }, []);
 
   /** Fresh tokens: the access cookie lives `expires_in` from now (less a margin for the trip). */
@@ -393,7 +398,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     api<User>("/api/auth/me")
       .then(
         (u) => alive && setUser(u),
-        () => undefined, // 401: a guest
+        (e: unknown) => alive && e instanceof ApiError && e.status === 401 && setSignedOut(true), // a guest
       )
       .finally(() => alive && setSessionLoading(false));
     return () => {
@@ -441,6 +446,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     () => ({
       user,
       loading: sessionLoading,
+      signedOut,
       refresh: refreshSession,
       login,
       register,
@@ -452,7 +458,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       refreshOrganizations,
       access,
     }),
-    [user, sessionLoading, refreshSession, login, register, logout, saveProfile, changePassword, keepSession, organizations, refreshOrganizations, access],
+    [user, sessionLoading, signedOut, refreshSession, login, register, logout, saveProfile, changePassword, keepSession, organizations, refreshOrganizations, access],
   );
 
   const cartValue = useMemo<CartValue>(
