@@ -16,12 +16,13 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { PhotoGrid } from "@/components/admin/loading/photo-grid";
+import { catalogEveryLabel, stockEveryLabel } from "@/components/admin/loading/sync-timers";
 import { Panel } from "@/components/admin/ui";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { apiErrorText } from "@/lib/admin/errors";
 import { duration, when } from "@/lib/admin/labels";
-import type { CheckStatus, Loading, LoadingPhoto, LoadingStage, StageStatus } from "@/lib/admin/types";
+import type { CheckStatus, Loading, LoadingPhoto, LoadingStage, StageStatus, SyncSettings } from "@/lib/admin/types";
 import { api } from "@/lib/api/client";
 import { formatNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -284,11 +285,13 @@ export function FailedPanel({ failed, onChange }: { failed: Loading["failed"]; o
 export function AutomationsDialog({
   perProduct,
   version,
+  sync,
   open,
   onOpenChange,
 }: {
   perProduct: number;
   version: number;
+  sync: SyncSettings;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -298,7 +301,7 @@ export function AutomationsDialog({
     "Фото, которое открыли на сайте раньше, чем до него дошла очередь, обрабатывается сразу — на долю загрузки, которую не берёт воркер.",
     `Когда выходит новая версия обработки (сейчас ${version}), фото старых версий обрабатываются заново после новых фото. До замены на сайте видна старая версия.`,
     "Если поставщик недоступен, фото остаются в очереди, а воркер ждёт минуту. Если у поставщика нет файла, фото помечается ошибкой.",
-    "Списки фото товаров в наличии перечитываются раз в 14 дней, цены и наличие — каждые 30 минут, каталог — раз в сутки.",
+    `Списки фото товаров в наличии перечитываются раз в 14 дней, цены и наличие — ${stockEveryLabel(sync.stock_every_min)}, каталог — ${catalogEveryLabel(sync)} (меняется в настройках).`,
   ];
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

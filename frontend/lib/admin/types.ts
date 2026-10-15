@@ -236,6 +236,19 @@ export type ImageSettings = {
   download_rps: number;
 };
 
+export type SyncSettings = {
+  stock_every_min: number;
+  catalog_every_hours: number; // divides 24: the slots fall on the same hours every day
+  catalog_hour: number; // local hour the catalog slots are counted from
+};
+
+/** The next run of a supplier sync, for the timers on the loading page. */
+export type SyncTimer = {
+  state: "scheduled" | "running" | "retry" | "waiting";
+  next_at: string | null;
+  last_success_at: string | null;
+};
+
 export type CheckStatus = "ok" | "warn" | "error" | "wait";
 export type LoadingCheck = {
   key: string;
@@ -289,6 +302,8 @@ export type Loading = {
   generated_at: string;
   version: number;
   settings: ImageSettings;
+  sync: SyncSettings;
+  schedule: { stock: SyncTimer; catalog: SyncTimer };
   limits: { download_rps_max: number; supplier_rps: number; web_concurrency: number };
   worker: {
     alive: boolean;

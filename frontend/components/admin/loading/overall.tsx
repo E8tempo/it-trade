@@ -2,6 +2,7 @@
 
 import { CheckCircle2, CirclePause, Clock, LoaderCircle, XCircle, type LucideIcon } from "lucide-react";
 
+import { SyncTimers } from "@/components/admin/loading/sync-timers";
 import { duration } from "@/lib/admin/labels";
 import type { Loading, LoadingStage, StageStatus } from "@/lib/admin/types";
 import { formatNumber } from "@/lib/format";
@@ -127,6 +128,8 @@ export function OverallPanel({ data }: { data: Loading }) {
           );
         })}
       </div>
+
+      <SyncTimers data={data} />
     </section>
   );
 }

@@ -99,6 +99,7 @@ export function LoadingDashboard({ initial }: { initial: Loading }) {
       <AutomationsDialog
         perProduct={settings.per_product}
         version={data.version}
+        sync={data.sync}
         open={dialog === "automations"}
         onOpenChange={(o) => setDialog(o ? "automations" : null)}
       />

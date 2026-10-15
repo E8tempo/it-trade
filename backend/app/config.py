@@ -54,8 +54,6 @@ class Settings(BaseSettings):
     # API processes (uvicorn --workers, see the Dockerfile): they share the supplier's photo downloads
     # the worker leaves free, for photos opened on the site before the worker got to them
     web_concurrency: int = 2
-    stock_sync_interval_min: int = 30  # supplier limit: 10/hour
-    catalog_sync_hour: int = 5  # local hour, after the supplier's nightly update
     timezone: str = "Europe/Simferopol"
 
     @field_validator("jwt_secret", mode="before")

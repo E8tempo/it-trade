@@ -29,10 +29,11 @@ from app.images.watermark import default_remover
 from app.models import Category, JobState, Product, ProductImage
 from app.models.base import utcnow
 from app.models.catalog import VISIBLE_STATUSES, ImageStatus
-from app.site_settings import SITE_RPS_MIN, ImageSettings, ShopSettings, get_settings_obj
+from app.site_settings import SITE_RPS_MIN, ImageSettings, ShopSettings, SyncSettings, get_settings_obj
 from app.supplier.client import IMAGE_RPS_LIMIT
 from app.sync.images import LIST_BATCH
-from app.worker import HEARTBEAT_EVERY, RETRY, RETRY_AFTER, TRIAL, WORKER
+from app.worker import HEARTBEAT_EVERY, RETRY, RETRY_AFTER, TRIAL, WORKER, scheduled_at
+from app.worker import jobs as worker_jobs
 
 router = APIRouter()
 
@@ -136,6 +137,7 @@ async def loading(session: Session) -> dict[str, Any]:
     s = get_settings()
     now = utcnow()
     cfg = await get_settings_obj(session, ImageSettings)
+    sync = await get_settings_obj(session, SyncSettings)
     jobs = {j.name: j for j in (await session.scalars(select(JobState))).all()}
     worker = _worker(jobs.get(WORKER), now)
     trial = await _trial(session, jobs.get(TRIAL))
@@ -237,6 +239,11 @@ async def loading(session: Session) -> dict[str, Any]:
         "generated_at": now,
         "version": VERSION,
         "settings": cfg.model_dump(),
+        "sync": sync.model_dump(),
+        "schedule": {
+            "stock": _next_sync(("stock",), jobs, sync, now),
+            "catalog": _next_sync(("categories", "products"), jobs, sync, now),
+        },
         "limits": {
             "download_rps_max": IMAGE_RPS_LIMIT - SITE_RPS_MIN,
             "supplier_rps": IMAGE_RPS_LIMIT,
@@ -306,6 +313,24 @@ def _error_text(error: str) -> str:
     if LOGIN_FAILED in error:
         return "Поставщик не принял логин и пароль"
     return re.sub(r"^(app|httpx)\.[\w.]+: ", "", error)
+
+
+def _next_sync(names: tuple[str, ...], jobs: dict[str, JobState], cfg: SyncSettings, now: datetime) -> dict[str, Any]:
+    """When the worker runs a sync next (for the timers on the page); a group (the category tree, then the
+    catalog) is described by its first job that is not done."""
+    by_name = {j.name: j for j in worker_jobs()}
+    states = [jobs.get(n) for n in names]
+    last = min((st.last_success_at for st in states if st and st.last_success_at), default=None)
+    if any(_job_running(st) for st in states):
+        return {"state": "running", "next_at": None, "last_success_at": last}
+    if failed := next((st for st in states if _job_failed(st)), None):
+        at = now if failed.info.get(RETRY) else max(now, failed.last_started_at + RETRY_AFTER)
+        return {"state": "retry", "next_at": at, "last_success_at": last}
+    job, st = by_name[names[0]], states[0]
+    dep = jobs.get(job.after) if job.after else None
+    if st is None or st.last_started_at is None or (job.after and not (dep and dep.last_success_at)):
+        return {"state": "waiting", "next_at": None, "last_success_at": last}
+    return {"state": "scheduled", "next_at": max(now, scheduled_at(job, st, now, cfg)), "last_success_at": last}
 
 
 def _sync_stage(key: str, jobs: dict[str, JobState], detail: str) -> dict[str, Any]:
