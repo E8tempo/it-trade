@@ -2,7 +2,7 @@ import re
 from datetime import date, datetime
 from enum import StrEnum
 
-from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy import JSON, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -36,6 +36,9 @@ class Organization(TimestampMixin, Base):
     review_note: Mapped[str | None] = mapped_column(Text)  # why it was rejected; the customer sees it
     reviewed_at: Mapped[datetime | None]
     reviewed_by: Mapped[str | None] = mapped_column(String(255))  # the manager's name or e-mail
+    # what its commercial offers print besides the requisites: contacts, bank details, the signer (api/quotes.py:
+    # QuoteProfile); NULL until the owner fills it in. Always assign a new dict.
+    quote_profile: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
 
     contracts: Mapped[list["Contract"]] = relationship(
         back_populates="organization", cascade="all, delete-orphan", order_by="[Contract.signed_on.desc(), Contract.id.desc()]"

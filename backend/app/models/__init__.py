@@ -4,6 +4,7 @@ from app.models.catalog import Audience, Category, PaymentMethod, PriceType, Pro
 from app.models.orders import DeliveryMethod, Order, OrderEvent, OrderItem, OrderSource, OrderStatus
 from app.models.content import Post, PostKind
 from app.models.organizations import Contract, ContractTerms, MemberRole, Organization, OrganizationMember, OrganizationStatus
+from app.models.quotes import PriceSource, Quote, QuoteItem
 from app.models.system import JobState, SiteSetting
 from app.models.users import EmailCode, RefreshToken, User, UserRole
 
@@ -29,6 +30,9 @@ __all__ = [
     "Organization",
     "OrganizationMember",
     "OrganizationStatus",
+    "PriceSource",
+    "Quote",
+    "QuoteItem",
     "Post",
     "PostKind",
     "JobState",
