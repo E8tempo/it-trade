@@ -39,13 +39,19 @@ const STATUS: Record<string, string> = {
 type Org = { name: string; kpp: string; ogrn: string; address: string };
 const NO_ORG: Org = { name: "", kpp: "", ogrn: "", address: "" };
 
-type RegisterField = "inn" | "org" | "kpp" | "name" | "phone" | "email" | "password";
-const STEP_FIELDS: RegisterField[][] = [["inn"], ["org", "kpp"], ["name", "phone"], ["email", "password"]];
+type RegisterField = "inn" | "org" | "kpp" | "name" | "phone" | "email" | "password" | "code";
+const STEP_FIELDS: RegisterField[][] = [["inn"], ["org", "kpp"], ["name", "phone"], ["email", "password"], ["code"]];
+const CODE_STEP = 4;
+const CODE_TTL_MS = 15 * 60_000; // as the backend's CODE_TTL: a code sent earlier is still good
+
+/** The code sent to an address (POST /api/auth/register/code). */
+type SentCode = { email: string; at: number; resendAt: number };
 
 /**
- * A client registers with their organization: they become its head, and a manager checks it. Four short steps
+ * A client registers with their organization: they become its head, and a manager checks it. Five short steps
  * in the login's card: the ИНН; the organization found by it in the registers to confirm ("Это ваша
- * организация?") or its name and КПП typed by hand; the contact person; the login.
+ * организация?") or its name and КПП typed by hand; the contact person; the e-mail and password; the code sent to
+ * that e-mail. The account is created only with the code: nobody takes an address that is not theirs.
  */
 export function RegisterForm() {
   const { register } = useSession();
@@ -57,6 +63,8 @@ export function RegisterForm() {
   const [errors, setErrors] = useState<FieldErrors<RegisterField>>({});
   const [error, setError] = useState<ReactNode>(null);
   const [pending, setPending] = useState(false);
+  const [sent, setSent] = useState<SentCode | null>(null);
+  const [now, setNow] = useState(0); // ticks while a resend waits
   const formRef = useRef<HTMLFormElement>(null);
   const focusStep = useRef(false);
   useLeaveWhenSignedIn();
@@ -66,7 +74,20 @@ export function RegisterForm() {
   const found = lookup?.result?.company ?? null;
   const confirming = step === 1 && !!found && !manual;
   const registered = !!lookup?.result?.registered;
-  const titles = ["Организация", confirming ? "Это ваша организация?" : "Реквизиты", "Контактное лицо", "Вход в кабинет"];
+  const titles = ["Организация", confirming ? "Это ваша организация?" : "Реквизиты", "Контактное лицо", "Вход в кабинет", "Код из письма"];
+  const resendIn = sent ? Math.max(0, Math.ceil((sent.resendAt - now) / 1000)) : 0;
+
+  // the countdown to another code
+  useEffect(() => {
+    if (step !== CODE_STEP || !sent) return;
+    const tick = () => setNow(Date.now());
+    const first = setTimeout(tick, 0);
+    const timer = setInterval(tick, 1000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, [step, sent]);
 
   // the first field of a step that just opened (or its first error)
   useEffect(() => {
@@ -96,6 +117,7 @@ export function RegisterForm() {
       email: emailError(text(data, "email").trim(), true),
       password:
         password.length < PASSWORD_MIN ? `Пароль должен быть не короче ${PASSWORD_MIN} символов` : password.length > 128 ? "Слишком длинный пароль" : undefined,
+      code: /^\d{6}$/.test(text(data, "code").trim()) ? undefined : "Код — 6 цифр из письма",
     };
   }
 
@@ -128,6 +150,33 @@ export function RegisterForm() {
     goTo(1);
   }
 
+  /** Sends the code to the e-mail typed (again only when asked, or for another address) and opens its step. */
+  async function sendCode(force = false) {
+    const email = text(new FormData(formRef.current!), "email").trim().toLowerCase();
+    if (!force && sent?.email === email && Date.now() - sent.at < CODE_TTL_MS) return goTo(CODE_STEP);
+    setPending(true);
+    setError(null);
+    try {
+      const r = await api<{ email: string; resend_in: number }>("/api/auth/register/code", { method: "POST", body: JSON.stringify({ email }) });
+      const at = Date.now();
+      setSent({ email: r.email, at, resendAt: at + r.resend_in * 1000 });
+      setNow(at);
+      setErrors((prev) => ({ ...prev, code: undefined }));
+      const input = formRef.current?.querySelector<HTMLInputElement>('[name="code"]');
+      if (input) input.value = "";
+      if (step !== CODE_STEP) goTo(CODE_STEP);
+      else input?.focus();
+    } catch (err) {
+      if (hasStatus(err, 409)) {
+        setError(alreadyRegistered());
+      } else {
+        setError(errorMessage(err, "Не удалось отправить код. Попробуйте ещё раз."));
+      }
+    } finally {
+      setPending(false);
+    }
+  }
+
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
@@ -144,15 +193,20 @@ export function RegisterForm() {
       if (check(2)) goTo(3);
       return;
     }
+    if (step === 3) {
+      if (check(3)) await sendCode();
+      return;
+    }
     // the last step: everything once more, back to the first step with an error
-    for (const s of [3, 2, 1, 0]) {
-      if (!check(s)) return s === 3 ? undefined : goTo(s);
+    for (const s of [CODE_STEP, 3, 2, 1, 0]) {
+      if (!check(s)) return s === CODE_STEP ? undefined : goTo(s);
     }
     const data = new FormData(e.currentTarget);
     setPending(true);
     try {
       await register({
         email: text(data, "email").trim(),
+        code: text(data, "code").trim(),
         password: text(data, "password"),
         name: text(data, "name").trim(),
         phone: text(data, "phone").trim(),
@@ -171,15 +225,10 @@ export function RegisterForm() {
         goTo(1);
         setError(message); // the organization is already a client: its step
       } else if (hasStatus(err, 409)) {
-        const next = nextFromLocation("");
-        setError(
-          <>
-            Этот e-mail уже зарегистрирован.{" "}
-            <Link href={authHref("/login", next || null)} className="font-medium underline underline-offset-2">
-              Войти
-            </Link>
-          </>,
-        );
+        setError(alreadyRegistered());
+      } else if (hasStatus(err, 400) && message) {
+        setErrors((prev) => ({ ...prev, code: message })); // a wrong or expired code
+        formRef.current?.querySelector<HTMLInputElement>('[name="code"]')?.select();
       } else if (hasStatus(err, 422)) {
         setError(message || "Проверьте данные: сервер их не принял.");
       } else {
@@ -205,7 +254,7 @@ export function RegisterForm() {
             Шаг {step + 1} из {titles.length}
           </span>
         </div>
-        <div className="mt-2 grid grid-cols-4 gap-1.5" aria-hidden>
+        <div className="mt-2 grid grid-cols-5 gap-1.5" aria-hidden>
           {titles.map((t, i) => (
             <span key={i} className={cn("h-1 rounded-full transition-colors duration-300", i <= step ? "bg-primary" : "bg-muted")} />
           ))}
@@ -340,6 +389,46 @@ export function RegisterForm() {
         </Field>
       </fieldset>
 
+      {/* 5. the code sent to the e-mail */}
+      <fieldset hidden={step !== CODE_STEP} className="space-y-4">
+        <legend className="sr-only">Код из письма</legend>
+        <p className="text-sm text-muted-foreground">
+          Мы отправили код на <span className="font-medium text-foreground">{sent?.email}</span>. Письмо приходит за минуту; если его нет,
+          загляните в «Спам».
+        </p>
+        <Field id="reg-code" label="Код из письма" error={errors.code}>
+          <Input
+            name="code"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            placeholder="••••••"
+            onChange={(e) => {
+              const digits = e.target.value.replace(/\D/g, "").slice(0, 6);
+              e.target.value = digits;
+              if (errors.code) setErrors((prev) => ({ ...prev, code: undefined }));
+              // all six typed or pasted: on at once
+              if (digits.length === 6 && !pending) formRef.current?.requestSubmit();
+            }}
+            className={`${FIELD} text-center text-xl font-semibold tracking-[0.5em] tabular-nums placeholder:tracking-[0.3em]`}
+            {...describedBy("reg-code", errors.code)}
+          />
+        </Field>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+          <button type="button" onClick={() => goTo(3)} className="text-muted-foreground hover:text-foreground">
+            Изменить e-mail
+          </button>
+          <button
+            type="button"
+            disabled={resendIn > 0 || pending}
+            onClick={() => void sendCode(true)}
+            className="font-medium text-primary hover:underline disabled:font-normal disabled:text-muted-foreground disabled:no-underline"
+          >
+            {resendIn > 0 ? `Отправить снова через ${resendIn} с` : "Отправить код снова"}
+          </button>
+        </div>
+      </fieldset>
+
       {error && <FormError>{error}</FormError>}
 
       {step === 0 && (
@@ -373,11 +462,33 @@ export function RegisterForm() {
           {back}
           <Button type="submit" className={cn(SUBMIT, "flex-1")} disabled={pending}>
             {pending && <LoaderCircle className="animate-spin" />}
+            Получить код
+          </Button>
+        </div>
+      )}
+      {step === CODE_STEP && (
+        <div className="flex gap-2">
+          {back}
+          <Button type="submit" className={cn(SUBMIT, "flex-1")} disabled={pending}>
+            {pending && <LoaderCircle className="animate-spin" />}
             Зарегистрироваться
           </Button>
         </div>
       )}
     </form>
+  );
+}
+
+/** «Этот e-mail уже зарегистрирован. Войти», keeping ?next=. */
+function alreadyRegistered(): ReactNode {
+  const next = nextFromLocation("");
+  return (
+    <>
+      Этот e-mail уже зарегистрирован.{" "}
+      <Link href={authHref("/login", next || null)} className="font-medium underline underline-offset-2">
+        Войти
+      </Link>
+    </>
   );
 }
 

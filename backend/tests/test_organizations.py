@@ -7,7 +7,7 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from conftest import approve, client_of, company_inn, login, register, reset_db
+from conftest import signup_code, approve, client_of, company_inn, login, register, reset_db
 
 from app.api import account as account_api
 from app.api import orders as orders_api
@@ -99,7 +99,7 @@ async def test_registration_with_an_organization(client, admin, browser):
 
     # the organization is required and checked; nothing is created when it is refused
     other = browser()
-    base = {"email": "petr@example.com", "password": "secret-123"}
+    base = {"email": "petr@example.com", "password": "secret-123", "code": await signup_code(other, "petr@example.com")}
     cases = [
         ({}, None),
         ({"organization": {**fresh(), "inn": "7707083894"}}, "Контрольная цифра ИНН"),
@@ -131,10 +131,10 @@ async def test_registration_with_an_organization(client, admin, browser):
         assert r.status_code == 409 and r.json()["detail"] == account_api.ALREADY_REGISTERED
     assert (await other.post("/api/auth/login", json=base)).status_code == 401  # no user was created
     # a branch (the same ИНН, another КПП) is another client; a sole trader has no КПП
-    await register(other, "petr@example.com", organization={**COMPANY, "kpp": "773602002"})
+    await register(other, "petr@example.com", organization={**COMPANY, "kpp": "773602002"}, code=base["code"])
     trader = (await register(browser(), "trader@example.com", organization={**SOLE_TRADER, "kpp": "773601001"}))["user"]
     assert trader["email"] == "trader@example.com"
-    r = await other.post("/api/auth/register", json={"email": "ivan@example.com", "password": "secret-123", "organization": fresh()})
+    r = await other.post("/api/auth/register", json={"email": "ivan@example.com", "code": "000000", "password": "secret-123", "organization": fresh()})
     assert r.status_code == 409  # the e-mail
 
 

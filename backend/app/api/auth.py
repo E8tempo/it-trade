@@ -9,14 +9,18 @@ API clients can instead send `Authorization: Bearer <access>` and pass the refre
 in the body of /api/auth/refresh.
 """
 
+import hashlib
+import hmac
+import secrets
 import time
 from collections import defaultdict, deque
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.account import OrganizationIn, check_not_registered, create_organization, is_registered
@@ -34,7 +38,8 @@ from app.auth import (
 )
 from app.companies import LookupUnavailable, configured, find_company
 from app.config import get_settings
-from app.models import User
+from app.mail import MailError, send_mail
+from app.models import EmailCode, User
 from app.models.base import utcnow
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -61,13 +66,25 @@ class TokenOut(BaseModel):
 
 
 class RegisterIn(BaseModel):
-    """A client registers with their organization (the site sells to businesses only); they become its head."""
+    """A client registers with their organization (the site sells to businesses only); they become its head.
+    `code`: the one sent to the e-mail (POST /register/code): nobody takes an address that is not theirs."""
 
     email: EmailStr
+    code: str = Field(pattern=r"^\d{6}$")
     password: str = Field(min_length=8, max_length=128)
     name: str | None = Field(None, max_length=255)
     phone: str | None = Field(None, max_length=32)
     organization: OrganizationIn
+
+
+class SignupCodeIn(BaseModel):
+    email: EmailStr
+
+
+class SignupCodeOut(BaseModel):
+    email: str
+    resend_in: int  # seconds until another code can be asked for
+    expires_in: int
 
 
 class LoginIn(BaseModel):
@@ -111,6 +128,56 @@ def _record_failure(*keys: str) -> None:
         _failures[key].append(now)
 
 
+# --- e-mail codes ---------------------------------------------------------------------------
+
+CODE_TTL = timedelta(minutes=15)
+CODE_RESEND = timedelta(seconds=60)
+CODE_ATTEMPTS = 5  # wrong tries of one code; then a new one is needed
+CODES_PER_HOUR = 5  # per address: nobody's mailbox gets flooded with codes
+SIGNUP = "signup"
+
+
+def _code_hash(email: str, code: str) -> str:
+    key = get_settings().jwt_secret.get_secret_value().encode()
+    return hmac.new(key, f"{email}:{code}".encode(), hashlib.sha256).hexdigest()
+
+
+async def _latest_code(session, email: str, purpose: str) -> EmailCode | None:
+    return await session.scalar(
+        select(EmailCode).where(EmailCode.email == email, EmailCode.purpose == purpose).order_by(EmailCode.id.desc()).limit(1)
+    )
+
+
+async def _use_code(session, email: str, purpose: str, code: str) -> None:
+    """Accepts the latest code sent to the address (it is used up), or 400 saying what to do."""
+    row = await _latest_code(session, email, purpose)
+    if row is None or row.used_at is not None or row.expires_at <= utcnow():
+        raise HTTPException(400, "Код устарел. Запросите новый.")
+    if row.attempts >= CODE_ATTEMPTS:
+        raise HTTPException(400, "Слишком много неверных попыток. Запросите новый код.")
+    if not hmac.compare_digest(row.code_hash, _code_hash(email, code)):
+        row.attempts += 1
+        await session.commit()
+        left = CODE_ATTEMPTS - row.attempts
+        raise HTTPException(400, f"Неверный код. Осталось попыток: {left}." if left else "Неверный код. Запросите новый.")
+    row.used_at = utcnow()
+
+
+def _code_letter(code: str) -> tuple[str, str, str]:
+    subject = f"Код подтверждения: {code}"
+    text = (
+        f"Здравствуйте!\n\nВаш код для регистрации на сайте IT Trade: {code}\n\n"
+        f"Код действует {int(CODE_TTL.total_seconds() // 60)} минут. Если вы не регистрировались, просто удалите это письмо.\n"
+    )
+    html = (
+        '<div style="font-family:Arial,sans-serif;font-size:15px;color:#111">'
+        "<p>Здравствуйте!</p><p>Ваш код для регистрации на сайте IT Trade:</p>"
+        f'<p style="font-size:28px;font-weight:bold;letter-spacing:6px">{code}</p>'
+        f"<p>Код действует {int(CODE_TTL.total_seconds() // 60)} минут. Если вы не регистрировались, просто удалите это письмо.</p></div>"
+    )
+    return subject, text, html
+
+
 # --- helpers --------------------------------------------------------------------------------
 
 
@@ -150,6 +217,37 @@ async def company(inn: Annotated[str, Query(pattern=r"^\d{10}(\d{2})?$")], reque
     return {"configured": True, "available": True, "company": found.as_dict() if found else None, "registered": registered}
 
 
+@router.post("/register/code", response_model=SignupCodeOut)
+async def signup_code(body: SignupCodeIn, request: Request, session: Session):
+    """Sends a code to the address registering: the account is created with it only (POST /register)."""
+    key = f"code:{client_ip(request)}"
+    _check_throttle(key)
+    email = normalize_email(body.email)
+    if await session.scalar(select(User.id).where(User.email == email)):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Email is already registered")
+    now = utcnow()
+    last = await _latest_code(session, email, SIGNUP)
+    if last is not None and now - last.created_at < CODE_RESEND:
+        wait = int((CODE_RESEND - (now - last.created_at)).total_seconds()) + 1
+        raise HTTPException(429, f"Новый код можно запросить через {wait} с", headers={"Retry-After": str(wait)})
+    recent = await session.scalar(
+        select(func.count()).select_from(EmailCode).where(EmailCode.email == email, EmailCode.created_at > now - timedelta(hours=1))
+    )
+    if recent >= CODES_PER_HOUR:
+        raise HTTPException(429, "На этот адрес уже отправлено много кодов. Попробуйте через час.")
+    _record_failure(key)  # every code sent counts against the address it is asked from
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    session.add(EmailCode(email=email, purpose=SIGNUP, code_hash=_code_hash(email, code), expires_at=now + CODE_TTL))
+    await session.flush()
+    try:
+        await send_mail(email, *_code_letter(code))
+    except MailError:
+        await session.rollback()
+        raise HTTPException(503, "Не удалось отправить письмо. Проверьте адрес или попробуйте позже.") from None
+    await session.commit()
+    return SignupCodeOut(email=email, resend_in=int(CODE_RESEND.total_seconds()), expires_in=int(CODE_TTL.total_seconds()))
+
+
 @router.post("/register", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterIn, request: Request, response: Response, session: Session):
     _check_throttle(f"ip:{client_ip(request)}")
@@ -158,6 +256,9 @@ async def register(body: RegisterIn, request: Request, response: Response, sessi
     _check_throttle(signups)
     _record_failure(signups)
     await check_not_registered(session, body.organization.inn, body.organization.kpp)
+    if await session.scalar(select(User.id).where(User.email == normalize_email(body.email))):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Email is already registered")
+    await _use_code(session, normalize_email(body.email), SIGNUP, body.code)
     user = User(email=normalize_email(body.email), password_hash=hash_password(body.password), name=body.name, phone=body.phone)
     session.add(user)
     try:

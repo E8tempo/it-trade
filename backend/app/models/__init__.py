@@ -5,7 +5,7 @@ from app.models.orders import DeliveryMethod, Order, OrderEvent, OrderItem, Orde
 from app.models.content import Post, PostKind
 from app.models.organizations import Contract, ContractTerms, MemberRole, Organization, OrganizationMember, OrganizationStatus
 from app.models.system import JobState, SiteSetting
-from app.models.users import RefreshToken, User, UserRole
+from app.models.users import EmailCode, RefreshToken, User, UserRole
 
 __all__ = [
     "Base",
@@ -33,6 +33,7 @@ __all__ = [
     "PostKind",
     "JobState",
     "SiteSetting",
+    "EmailCode",
     "RefreshToken",
     "User",
     "UserRole",

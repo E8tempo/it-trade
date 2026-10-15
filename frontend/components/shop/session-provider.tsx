@@ -71,7 +71,7 @@ const serverPayment = (): PaymentMethod => "cash";
 
 // --- contexts --------------------------------------------------------------------------------
 
-export type RegisterData = { email: string; password: string; name: string | null; phone: string | null; organization: OrganizationInput };
+export type RegisterData = { email: string; code: string; password: string; name: string | null; phone: string | null; organization: OrganizationInput };
 export type CartLineInput = { sku: number; qty: number };
 
 type SessionValue = {
