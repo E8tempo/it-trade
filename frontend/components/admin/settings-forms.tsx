@@ -120,15 +120,17 @@ export function RequeueSection() {
   }
 
   return (
-    <section>
-      <h3 className="mb-1 font-medium">Переобработка фото</h3>
-      <p className="mb-4 text-sm text-muted-foreground">
-        Обычно не нужна: после новой версии обработки фото переобрабатываются сами. Пригодится, чтобы прогнать заново фото одного
-        размера знака — например, после перекалибровки его шаблона. Пока новая версия не готова, на сайте видна старая.
-      </p>
-      <div className="flex flex-wrap gap-2">
+    <section className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between lg:gap-8">
+      <div className="min-w-0">
+        <h3 className="font-medium">Переобработка фото</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Обычно не нужна: после новой версии обработки фото переобрабатываются сами. Пригодится, чтобы прогнать заново фото
+          одного размера знака — например, после перекалибровки его шаблона.
+        </p>
+      </div>
+      <div className="flex shrink-0 flex-wrap gap-2">
         <Select items={VARIANTS} value={variant} onValueChange={(v) => v && setVariant(v)}>
-          <SelectTrigger className="h-9 w-48">
+          <SelectTrigger className="h-9 w-44">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

@@ -99,7 +99,7 @@ function Timer({
     tone = "text-muted-foreground text-base";
   } else if (left == null) {
     value = "—";
-  } else if (left <= 0) {
+  } else if (left < 1) {
     // the worker looks at its jobs every 30 seconds
     value = "вот-вот";
     tone = timer.state === "retry" ? "text-destructive" : "text-primary";

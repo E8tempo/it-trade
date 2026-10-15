@@ -5,10 +5,9 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { OverallPanel } from "@/components/admin/loading/overall";
-import { AutomationsDialog, Checks, FailedPanel, QualityPanel, Stages } from "@/components/admin/loading/sections";
+import { AutomationsDialog, Checks, ProblemPhotos, Stages } from "@/components/admin/loading/sections";
 import { LoadingSettingsDialog } from "@/components/admin/loading/settings-panel";
 import { TrialPanel } from "@/components/admin/loading/trial-panel";
-import { Panel } from "@/components/admin/ui";
 import { Button } from "@/components/ui/button";
 import { apiErrorText } from "@/lib/admin/errors";
 import type { Loading } from "@/lib/admin/types";
@@ -118,15 +117,12 @@ export function LoadingDashboard({ initial }: { initial: Loading }) {
 
       <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div className="min-w-0 space-y-6">
-          <Panel title="Этапы">
-            <Stages stages={data.stages} />
-          </Panel>
+          <Stages stages={data.stages} />
           <TrialPanel data={data} onChange={refresh} />
         </div>
         <div className="min-w-0 space-y-6">
           <Checks checks={data.checks} onRetry={retrySyncs} />
-          <FailedPanel failed={data.failed} onChange={refresh} />
-          <QualityPanel quality={data.quality} />
+          <ProblemPhotos data={data} onChange={refresh} />
         </div>
       </div>
     </>

@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 
 const num = (v: number) => v.toLocaleString("ru-RU", { maximumFractionDigits: 2 });
 
-const DIALOG = "max-h-[calc(100dvh-2rem)] gap-5 overflow-y-auto p-5 sm:max-w-3xl sm:p-6";
+const DIALOG = "max-h-[calc(100dvh-2rem)] gap-5 overflow-y-auto p-5 sm:max-w-5xl sm:p-6";
 
 // the supplier allows prices and stock 10 times an hour: not more often than every 6 minutes
 const STOCK_MINUTES = [10, 15, 20, 30, 45, 60, 120, 180, 360, 720, 1440];
@@ -96,13 +96,13 @@ function SettingsForm({ data, onSaved }: { data: Loading; onSaved: () => void })
   }
 
   return (
-    <form onSubmit={submit} className="space-y-6">
-      <section>
-        <h3 className="mb-3 font-medium">Обмен с поставщиком</h3>
-        <div className="grid grid-cols-1 gap-x-6 gap-y-4 md:grid-cols-2">
+    <form onSubmit={submit} className="space-y-5">
+      <div className="grid grid-cols-1 gap-x-8 gap-y-6 lg:grid-cols-3 lg:divide-x [&>section]:lg:pr-8 [&>section:last-child]:lg:pr-0">
+        <section className="space-y-4">
+          <h3 className="font-medium">Обмен с поставщиком</h3>
           <Field label="Цены и наличие">
             <Pick items={stockItems} value={sync.stock_every_min} onChange={(v) => setSync({ ...sync, stock_every_min: v })} />
-            <Hint>Поставщик разрешает 10 запросов в час, поэтому не чаще раза в 6 минут. Вместе с ценами пересчитываются цены сайта.</Hint>
+            <Hint>Не чаще раза в 6 минут: лимит поставщика — 10 запросов в час.</Hint>
           </Field>
           <Field label="Каталог и категории">
             <div className="flex gap-2">
@@ -116,20 +116,16 @@ function SettingsForm({ data, onSaved }: { data: Loading; onSaved: () => void })
                 items={hourItems}
                 value={sync.catalog_hour}
                 onChange={(v) => setSync({ ...sync, catalog_hour: v })}
-                className="w-28"
+                className="w-24"
                 label={sync.catalog_every_hours === 24 ? "Во сколько" : "Начиная с"}
               />
             </div>
-            <Hint>
-              Сейчас: {catalogEveryLabel(sync)}. Поставщик обновляет каталог ночью, файл ~125 МБ; скачивать его можно 2 раза в час.
-            </Hint>
+            <Hint>{catalogEveryLabel(sync)}. Поставщик обновляет каталог ночью.</Hint>
           </Field>
-        </div>
-      </section>
+        </section>
 
-      <section className="border-t pt-5">
-        <h3 className="mb-3 font-medium">Фото</h3>
-        <div className="grid grid-cols-1 gap-x-6 gap-y-4 md:grid-cols-2">
+        <section className="space-y-4">
+          <h3 className="font-medium">Фото</h3>
           <Field label="Фото на товар">
             <Input
               type="number"
@@ -139,7 +135,7 @@ function SettingsForm({ data, onSaved }: { data: Loading; onSaved: () => void })
               onChange={(e) => setImages({ ...images, per_product: Math.max(1, Math.min(50, Math.round(Number(e.target.value) || 1))) })}
               className="h-9 w-24"
             />
-            <Hint>Грузятся и показываются на сайте первые N фото товара, главное — первым. Если увеличить, догрузятся только недостающие.</Hint>
+            <Hint>Первые N фото товара, главное — первым. Если увеличить, догрузятся только недостающие.</Hint>
           </Field>
           <Field label="Скорость загрузки, фото в секунду">
             <Input
@@ -152,10 +148,14 @@ function SettingsForm({ data, onSaved }: { data: Loading; onSaved: () => void })
               className="h-9 w-24"
             />
             <Hint>
-              Поставщик даёт {num(total)} фото/с на всех. Что не берёт воркер, остаётся сайту: сейчас {num(total - rps)} фото/с на{" "}
-              {processes} {processes === 1 ? "процесс" : "процесса"} API. Пока сайт закрыт, можно ставить до {num(max)}.
+              Из {num(total)} фото/с поставщика сайту остаётся {num(total - rps)} на {processes}{" "}
+              {processes === 1 ? "процесс" : "процесса"} API. Пока сайт закрыт — до {num(max)}.
             </Hint>
           </Field>
+        </section>
+
+        <section className="space-y-4">
+          <h3 className="font-medium">Обработка</h3>
           <Toggle
             checked={images.gallery}
             onChange={(v) => setImages({ ...images, gallery: v })}
@@ -166,10 +166,10 @@ function SettingsForm({ data, onSaved }: { data: Loading; onSaved: () => void })
             checked={images.reprocess}
             onChange={(v) => setImages({ ...images, reprocess: v })}
             title="Переобрабатывать фото старых версий"
-            hint="Когда выходит новая версия обработки — после новых фото. До замены на сайте видна старая версия."
+            hint="Когда выходит новая версия обработки — после новых фото. До замены на сайте видна старая."
           />
-        </div>
-      </section>
+        </section>
+      </div>
 
       <div className="flex justify-end gap-2">
         <DialogClose render={<Button type="button" variant="ghost" />}>Отмена</DialogClose>

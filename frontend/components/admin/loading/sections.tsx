@@ -6,62 +6,91 @@ import {
   CircleMinus,
   CirclePause,
   Clock,
+  Eye,
+  ImageOff,
   LoaderCircle,
   RotateCcw,
+  ScanSearch,
+  Sparkles,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { PhotoGrid } from "@/components/admin/loading/photo-grid";
 import { catalogEveryLabel, stockEveryLabel } from "@/components/admin/loading/sync-timers";
-import { Panel } from "@/components/admin/ui";
+import { Card, CardLine } from "@/components/admin/ui";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { apiErrorText } from "@/lib/admin/errors";
 import { duration, when } from "@/lib/admin/labels";
-import type { CheckStatus, Loading, LoadingPhoto, LoadingStage, StageStatus, SyncSettings } from "@/lib/admin/types";
+import type { CheckStatus, Loading, LoadingCheck, LoadingPhoto, LoadingStage, StageStatus, SyncSettings } from "@/lib/admin/types";
 import { api } from "@/lib/api/client";
-import { formatNumber } from "@/lib/format";
+import { formatNumber, pluralize } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-const CHECK: Record<CheckStatus, { icon: LucideIcon; tone: string; label: string }> = {
-  ok: { icon: CheckCircle2, tone: "text-emerald-600", label: "в порядке" },
-  warn: { icon: AlertTriangle, tone: "text-amber-600", label: "стоит проверить" },
-  error: { icon: XCircle, tone: "text-destructive", label: "ошибка" },
-  wait: { icon: Clock, tone: "text-muted-foreground", label: "пока неизвестно" },
-};
+// --- readiness -----------------------------------------------------------------------------------
 
-export function Checks({ checks, onRetry }: { checks: Loading["checks"]; onRetry: () => Promise<void> }) {
-  const bad = checks.filter((c) => c.status === "error").length;
+const CHECK: Record<CheckStatus, { icon: LucideIcon; tone: string; text: string; label: string }> = {
+  error: { icon: XCircle, tone: "bg-destructive/10 text-destructive", text: "text-destructive", label: "ошибка" },
+  warn: { icon: AlertTriangle, tone: "bg-amber-500/10 text-amber-600", text: "text-amber-700", label: "стоит проверить" },
+  wait: { icon: Clock, tone: "bg-muted text-muted-foreground", text: "text-muted-foreground", label: "пока неизвестно" },
+  ok: { icon: CheckCircle2, tone: "bg-emerald-500/10 text-emerald-600", text: "text-emerald-700", label: "в порядке" },
+};
+const ORDER: CheckStatus[] = ["error", "warn", "wait", "ok"];
+
+/** What has to be right before the photos are loaded: problems first, with what to do; the rest one line each. */
+export function Checks({ checks, onRetry }: { checks: LoadingCheck[]; onRetry: () => Promise<void> }) {
+  const errors = checks.filter((c) => c.status === "error").length;
+  const warnings = checks.filter((c) => c.status === "warn").length;
+  const sorted = [...checks].sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status));
+  const problems = sorted.filter((c) => c.status !== "ok");
+  const fine = sorted.filter((c) => c.status === "ok");
   return (
-    <Panel
+    <Card
       title="Готовность"
+      description="Что проверить перед загрузкой фото"
       action={
-        <span className={cn("text-sm", bad ? "text-destructive" : "text-muted-foreground")}>
-          {bad ? `${bad} ${bad === 1 ? "ошибка" : bad < 5 ? "ошибки" : "ошибок"}` : "ошибок нет"}
+        <span
+          className={cn(
+            "rounded-full px-2.5 py-1 text-xs font-medium",
+            errors ? CHECK.error.tone : warnings ? CHECK.warn.tone : CHECK.ok.tone,
+          )}
+        >
+          {errors
+            ? `${errors} ${pluralize(errors, ["ошибка", "ошибки", "ошибок"])}`
+            : warnings
+              ? `${warnings} ${pluralize(warnings, ["замечание", "замечания", "замечаний"])}`
+              : "всё в порядке"}
         </span>
       }
     >
-      <ul className="space-y-3">
-        {checks.map((c) => {
-          const s = CHECK[c.status];
-          return (
-            <li key={c.key} className="flex gap-3">
-              <s.icon className={cn("mt-0.5 size-4 shrink-0", s.tone)} aria-label={s.label} />
-              <div className="min-w-0 text-sm">
-                <p className="font-medium">{c.title}</p>
-                <p className="text-muted-foreground">{c.detail}</p>
-                {c.hint && <p className="mt-0.5 text-xs text-muted-foreground/80">{c.hint}</p>}
-                {c.action === "retry" && <RetryButton onRetry={onRetry} className="mt-2" />}
-              </div>
+      {problems.map((c) => {
+        const s = CHECK[c.status];
+        return (
+          <CardLine key={c.key} icon={s.icon} tone={s.tone} title={c.title} aside={<span className={s.text}>{s.label}</span>}>
+            <p className="text-sm text-muted-foreground">{c.detail}</p>
+            {c.hint && <p className="mt-1 text-xs text-muted-foreground/80">{c.hint}</p>}
+            {c.action === "retry" && <RetryButton onRetry={onRetry} className="mt-2" />}
+          </CardLine>
+        );
+      })}
+      {fine.length > 0 && (
+        <ul className="space-y-2 py-4 text-sm">
+          {fine.map((c) => (
+            <li key={c.key} className="flex gap-2.5">
+              <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" aria-label="в порядке" />
+              <span className="min-w-0">
+                <span className="font-medium">{c.title}</span>
+                <span className="text-muted-foreground"> — {c.detail}</span>
+              </span>
             </li>
-          );
-        })}
-      </ul>
-    </Panel>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }
 
@@ -86,77 +115,92 @@ function RetryButton({ onRetry, className }: { onRetry: () => Promise<void>; cla
   );
 }
 
-const STAGE: Record<StageStatus, { icon: LucideIcon; tone: string; label: string }> = {
-  done: { icon: CheckCircle2, tone: "text-emerald-600", label: "Готово" },
-  running: { icon: LoaderCircle, tone: "text-primary", label: "Идёт" },
-  waiting: { icon: Clock, tone: "text-muted-foreground", label: "В очереди" },
-  paused: { icon: CirclePause, tone: "text-amber-600", label: "На паузе" },
-  error: { icon: XCircle, tone: "text-destructive", label: "Ошибка" },
-  off: { icon: CircleMinus, tone: "text-muted-foreground", label: "Выключено" },
+// --- stages --------------------------------------------------------------------------------------
+
+const STAGE: Record<StageStatus, { icon: LucideIcon; tone: string; text: string; label: string }> = {
+  done: { icon: CheckCircle2, tone: "bg-emerald-500/10 text-emerald-600", text: "text-emerald-700", label: "Готово" },
+  running: { icon: LoaderCircle, tone: "bg-primary/10 text-primary", text: "text-primary", label: "Идёт" },
+  waiting: { icon: Clock, tone: "bg-muted text-muted-foreground", text: "text-muted-foreground", label: "В очереди" },
+  paused: { icon: CirclePause, tone: "bg-amber-500/10 text-amber-600", text: "text-amber-700", label: "На паузе" },
+  error: { icon: XCircle, tone: "bg-destructive/10 text-destructive", text: "text-destructive", label: "Ошибка" },
+  off: { icon: CircleMinus, tone: "bg-muted text-muted-foreground", text: "text-muted-foreground", label: "Выключено" },
 };
 
 export function Stages({ stages }: { stages: LoadingStage[] }) {
   return (
-    <ol className="divide-y">
+    <Card title="Этапы" description="По порядку: сначала товары и цены, потом фото">
       {stages.map((st, i) => (
         <StageRow key={st.key} stage={st} n={i + 1} />
       ))}
-    </ol>
+    </Card>
   );
 }
 
 function StageRow({ stage: st, n }: { stage: LoadingStage; n: number }) {
   const s = STAGE[st.status];
-  const counted = st.total != null && st.done != null;
-  const pct = counted && st.total ? Math.min(100, (100 * st.done!) / st.total) : st.status === "done" ? 100 : 0;
+  const counted = st.total != null && st.done != null && st.total > 0;
+  const pct = counted ? Math.min(100, (100 * st.done!) / st.total!) : 0;
   return (
-    <li className="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-x-3 py-3.5 first:pt-0 last:pb-0">
-      <s.icon className={cn("mt-0.5 size-5", s.tone, st.status === "running" && "animate-spin [animation-duration:2.5s]")} aria-hidden />
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-          <p className="font-medium">
-            <span className="mr-1.5 text-muted-foreground tabular-nums">{n}.</span>
-            {st.title}
-          </p>
-          <p className={cn("text-sm", s.tone)}>{stageNote(st, s.label)}</p>
-        </div>
-        <p className="text-sm text-muted-foreground">{st.detail}</p>
-        {counted && st.total! > 0 && (
-          <div className="mt-2 flex items-center gap-3">
-            <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
-              <div className={cn("h-2 rounded-full", st.status === "done" ? "bg-emerald-500" : "bg-primary")} style={{ width: `${pct}%` }} />
-            </div>
-            <span className="shrink-0 text-sm tabular-nums">
+    <CardLine
+      icon={s.icon}
+      tone={s.tone}
+      spin={st.status === "running"}
+      title={
+        <>
+          <span className="mr-1.5 text-muted-foreground tabular-nums">{n}.</span>
+          {st.title}
+        </>
+      }
+      aside={<span className={s.text}>{stageNote(st, s.label)}</span>}
+    >
+      <p className="text-sm text-muted-foreground">{st.detail}</p>
+      {counted && (
+        <Bar
+          pct={pct}
+          done={st.status === "done"}
+          label={
+            <>
               {formatNumber(st.done!)} из {st.estimated && "≈"}
               {formatNumber(st.total!)}
               <span className="ml-1.5 text-muted-foreground">{pct < 1 && pct > 0 ? "<1" : Math.floor(pct)}%</span>
-            </span>
-          </div>
-        )}
-        {st.status === "running" && st.progress != null && (
-          <div className="mt-2 flex items-center gap-3">
-            <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
-              <div className="h-2 rounded-full bg-primary transition-[width] duration-700" style={{ width: `${st.progress * 100}%` }} />
-            </div>
-            <span className="shrink-0 text-sm tabular-nums">
+            </>
+          }
+        />
+      )}
+      {st.status === "running" && st.progress != null && (
+        <Bar
+          pct={st.progress * 100}
+          label={
+            <>
               {st.phase && <span className="mr-1.5 text-muted-foreground">{st.phase}</span>}
               {Math.floor(st.progress * 100)}%
-            </span>
-          </div>
-        )}
-        {st.status === "running" && st.progress == null && st.phase && <p className="mt-1 text-sm text-muted-foreground">{st.phase}</p>}
-        {st.failed > 0 && <p className="mt-1 text-xs text-destructive">не скачались: {formatNumber(st.failed)}</p>}
-        {st.error && (
-          <p className="mt-1 text-sm break-words text-destructive">
-            {st.error}
-            <span className="text-muted-foreground">
-              {" · "}
-              {st.retry_requested ? "повтор в течение 30 секунд" : st.retry_at ? `повтор ${retryWhen(st.retry_at)}` : "повтор скоро"}
-            </span>
-          </p>
-        )}
+            </>
+          }
+        />
+      )}
+      {st.status === "running" && st.progress == null && st.phase && <p className="mt-1 text-sm text-muted-foreground">{st.phase}</p>}
+      {st.failed > 0 && <p className="mt-1 text-xs text-destructive">не скачались: {formatNumber(st.failed)}</p>}
+      {st.error && (
+        <p className="mt-1 text-sm break-words text-destructive">
+          {st.error}
+          <span className="text-muted-foreground">
+            {" · "}
+            {st.retry_requested ? "повтор в течение 30 секунд" : st.retry_at ? `повтор ${retryWhen(st.retry_at)}` : "повтор скоро"}
+          </span>
+        </p>
+      )}
+    </CardLine>
+  );
+}
+
+function Bar({ pct, done, label }: { pct: number; done?: boolean; label: React.ReactNode }) {
+  return (
+    <div className="mt-2 flex items-center gap-3">
+      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+        <div className={cn("h-full rounded-full transition-[width] duration-700", done ? "bg-emerald-500" : "bg-primary")} style={{ width: `${pct}%` }} />
       </div>
-    </li>
+      <span className="shrink-0 text-sm tabular-nums">{label}</span>
+    </div>
   );
 }
 
@@ -174,68 +218,14 @@ function stageNote(st: LoadingStage, label: string): string {
   return label;
 }
 
-export function QualityPanel({ quality }: { quality: Loading["quality"] }) {
-  const [shown, setShown] = useState<{ kind: "left" | "no_mark"; photos: LoadingPhoto[] } | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+// --- photos with problems ------------------------------------------------------------------------
 
-  async function show(kind: "left" | "no_mark") {
-    if (shown?.kind === kind) return setShown(null);
-    setBusy(kind);
-    try {
-      setShown({ kind, photos: await api<LoadingPhoto[]>(`/api/admin/loading/photos?kind=${kind}&limit=120`) });
-    } catch (e) {
-      toast.error(apiErrorText(e));
-    } finally {
-      setBusy(null);
-    }
-  }
+type PhotoKind = "left" | "no_mark" | "trial";
 
-  const rows = [
-    {
-      kind: "left" as const,
-      label: "Остался заметный след знака",
-      n: quality.visible_left,
-      hint: `Остаток больше ${quality.left_threshold}: буквы могут быть видны. Худшие — первыми.`,
-    },
-    {
-      kind: "no_mark" as const,
-      label: "Знак не найден",
-      n: quality.no_mark,
-      hint: "Обычно на фото знака и правда нет, но почти чёрный знак на чёрном товаре детектор иногда пропускает.",
-    },
-  ];
-  return (
-    <Panel title="Качество фото">
-      <p className="mb-4 text-sm text-muted-foreground">
-        После снятия знака у каждого фото измеряется, сколько знака осталось; проверено {formatNumber(quality.checked)} фото. Клик по
-        фото открывает его в лаборатории — с оригиналом и сравнением до/после.
-      </p>
-      <ul className="space-y-3">
-        {rows.map((r) => (
-          <li key={r.kind} className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 text-sm">
-              <p>
-                <span className="font-medium">{r.label}:</span> <span className="tabular-nums">{formatNumber(r.n)}</span>
-              </p>
-              <p className="text-xs text-muted-foreground">{r.hint}</p>
-            </div>
-            <Button variant="outline" size="sm" disabled={!r.n || busy !== null} onClick={() => show(r.kind)}>
-              {busy === r.kind && <LoaderCircle className="animate-spin" />}
-              {shown?.kind === r.kind ? "Скрыть" : "Показать"}
-            </Button>
-          </li>
-        ))}
-      </ul>
-      {shown && (
-        <div className="mt-5">
-          <PhotoGrid photos={shown.photos} threshold={quality.left_threshold} />
-        </div>
-      )}
-    </Panel>
-  );
-}
-
-export function FailedPanel({ failed, onChange }: { failed: Loading["failed"]; onChange: () => void }) {
+/** The photos that did not download and the ones whose watermark removal is worth a look, in one card. */
+export function ProblemPhotos({ data, onChange }: { data: Loading; onChange: () => void }) {
+  const { failed, quality } = data;
+  const [shown, setShown] = useState<"left" | "no_mark" | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function retry() {
@@ -251,24 +241,12 @@ export function FailedPanel({ failed, onChange }: { failed: Loading["failed"]; o
     }
   }
 
+  const count = (n: number, bad: boolean) => <span className={cn("text-lg font-semibold tabular-nums", bad && n > 0 && "text-destructive")}>{formatNumber(n)}</span>;
   return (
-    <Panel
-      title="Фото, которые не скачались"
-      action={
-        <Button variant="outline" size="sm" onClick={retry} disabled={busy || !failed.total}>
-          {busy ? <LoaderCircle className="animate-spin" /> : <RotateCcw />}
-          Повторить
-        </Button>
-      }
-    >
-      {failed.total === 0 ? (
-        <p className="text-sm text-muted-foreground">Таких нет.</p>
-      ) : (
-        <>
-          <p className="mb-3 text-sm text-muted-foreground">
-            {formatNumber(failed.total)} фото после трёх попыток. Если не скачалось главное фото, главным становится следующее.
-          </p>
-          <ul className="space-y-1.5 text-sm">
+    <Card title="Фото с проблемами" description={`После снятия знака у каждого фото измеряется, сколько знака осталось; проверено ${formatNumber(quality.checked)}.`}>
+      <CardLine icon={ImageOff} tone="bg-destructive/10 text-destructive" title="Не скачались" aside={count(failed.total, true)}>
+        {failed.reasons.length > 0 && (
+          <ul className="text-sm">
             {failed.reasons.map((r) => (
               <li key={r.reason} className="flex justify-between gap-3">
                 <span className="min-w-0 break-words">{r.reason}</span>
@@ -276,11 +254,87 @@ export function FailedPanel({ failed, onChange }: { failed: Loading["failed"]; o
               </li>
             ))}
           </ul>
-        </>
-      )}
-    </Panel>
+        )}
+        <p className="text-sm text-muted-foreground">После трёх попыток. Если не скачалось главное фото, главным становится следующее.</p>
+        <Button variant="outline" size="sm" className="mt-2" onClick={retry} disabled={busy || !failed.total}>
+          {busy ? <LoaderCircle className="animate-spin" /> : <RotateCcw />}
+          Повторить
+        </Button>
+      </CardLine>
+      <CardLine icon={Sparkles} tone="bg-amber-500/10 text-amber-600" title="Остался заметный след знака" aside={count(quality.visible_left, true)}>
+        <p className="text-sm text-muted-foreground">Остаток больше {quality.left_threshold}: буквы могут быть видны. Худшие — первыми.</p>
+        <ShowButton disabled={!quality.visible_left} onClick={() => setShown("left")} />
+      </CardLine>
+      <CardLine icon={ScanSearch} title="Знак не найден" aside={count(quality.no_mark, false)}>
+        <p className="text-sm text-muted-foreground">
+          Обычно на фото знака и правда нет, но почти чёрный знак на чёрном товаре детектор иногда пропускает.
+        </p>
+        <ShowButton disabled={!quality.no_mark} onClick={() => setShown("no_mark")} />
+      </CardLine>
+      <PhotosDialog
+        kind={shown}
+        threshold={quality.left_threshold}
+        title={shown === "left" ? "Остался заметный след знака" : "Знак не найден"}
+        onOpenChange={(o) => !o && setShown(null)}
+      />
+    </Card>
   );
 }
+
+function ShowButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
+  return (
+    <Button variant="outline" size="sm" className="mt-2" disabled={disabled} onClick={onClick}>
+      <Eye />
+      Показать
+    </Button>
+  );
+}
+
+/** Photos of a kind in a wide dialog, loaded when it opens; each opens in the lab. */
+export function PhotosDialog({
+  kind,
+  title,
+  threshold,
+  onOpenChange,
+}: {
+  kind: PhotoKind | null;
+  title: string;
+  threshold: number;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [photos, setPhotos] = useState<{ kind: PhotoKind; list: LoadingPhoto[] } | null>(null);
+  useEffect(() => {
+    if (!kind) return;
+    let cancelled = false;
+    api<LoadingPhoto[]>(`/api/admin/loading/photos?kind=${kind}&limit=${kind === "trial" ? 500 : 120}`).then(
+      (list) => !cancelled && setPhotos({ kind, list }),
+      (e) => !cancelled && toast.error(apiErrorText(e)),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [kind]);
+  const list = photos && photos.kind === kind ? photos.list : null;
+  return (
+    <Dialog open={kind !== null} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] gap-5 overflow-y-auto p-5 sm:max-w-6xl sm:p-6">
+        <DialogHeader>
+          <DialogTitle className="text-lg font-semibold">{title}</DialogTitle>
+          <DialogDescription>Клик по фото открывает его в лаборатории — с оригиналом и сравнением до/после.</DialogDescription>
+        </DialogHeader>
+        {list ? (
+          <PhotoGrid photos={list} threshold={threshold} />
+        ) : (
+          <div className="grid h-40 place-items-center">
+            <LoaderCircle className="size-5 animate-spin text-muted-foreground" />
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// --- what happens by itself ----------------------------------------------------------------------
 
 export function AutomationsDialog({
   perProduct,
