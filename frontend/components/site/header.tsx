@@ -9,6 +9,7 @@ import { HEADER_ACTION } from "@/components/site/header-action";
 import { Logo } from "@/components/site/logo";
 import { MobileMenu } from "@/components/site/mobile-menu";
 import { SearchBox, SearchBoxFallback } from "@/components/site/search-box";
+import { ThemeToggle } from "@/components/site/theme-toggle";
 import { getShop } from "@/lib/catalog";
 
 // own row on phones, next to the catalog button from md up (not stretched over wide screens)
@@ -31,6 +32,7 @@ export function SiteHeader() {
           <Suspense fallback={null}>
             <HeaderPhone />
           </Suspense>
+          <ThemeToggle />
           {/* the login link returns to the current URL, which is only known in the browser */}
           <Suspense fallback={<AccountMenuFallback />}>
             <AccountMenu />

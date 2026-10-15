@@ -95,7 +95,8 @@
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.424 0.199 265.638);
+  /* light enough for links on the dark page, dark enough for white text on buttons */
+  --primary: oklch(0.585 0.22 263);
   --primary-foreground: oklch(0.97 0.014 254.604);
   --secondary: oklch(0.274 0.006 286.033);
   --secondary-foreground: oklch(0.985 0 0);
@@ -120,6 +121,45 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  /* Statuses and notices are coloured with the palette's dark shades (text-amber-800 on bg-amber-500/10 and
+     the like): on a dark page those shades become the light ones, so the same classes read in both themes. */
+  --color-red-600: oklch(70.4% 0.191 22.216);
+  --color-red-700: oklch(70.4% 0.191 22.216);
+  --color-red-800: oklch(80.8% 0.114 19.571);
+  --color-red-900: oklch(88.5% 0.062 18.334);
+  --color-amber-600: oklch(82.8% 0.189 84.429);
+  --color-amber-700: oklch(82.8% 0.189 84.429);
+  --color-amber-800: oklch(87.9% 0.169 91.605);
+  --color-amber-900: oklch(92.4% 0.12 95.746);
+  --color-green-600: oklch(79.2% 0.209 151.711);
+  --color-green-700: oklch(79.2% 0.209 151.711);
+  --color-green-800: oklch(87.1% 0.15 154.449);
+  --color-green-900: oklch(92.5% 0.084 155.995);
+  --color-emerald-600: oklch(76.5% 0.177 163.223);
+  --color-emerald-700: oklch(76.5% 0.177 163.223);
+  --color-emerald-800: oklch(84.5% 0.143 164.978);
+  --color-emerald-900: oklch(90.5% 0.093 164.15);
+  --color-teal-600: oklch(77.7% 0.152 181.912);
+  --color-teal-700: oklch(77.7% 0.152 181.912);
+  --color-teal-800: oklch(85.5% 0.138 181.071);
+  --color-teal-900: oklch(91% 0.096 180.426);
+  --color-sky-600: oklch(74.6% 0.16 232.661);
+  --color-sky-700: oklch(74.6% 0.16 232.661);
+  --color-sky-800: oklch(82.8% 0.111 230.318);
+  --color-sky-900: oklch(90.1% 0.058 230.902);
+  --color-blue-600: oklch(70.7% 0.165 254.624);
+  --color-blue-700: oklch(70.7% 0.165 254.624);
+  --color-blue-800: oklch(80.9% 0.105 251.813);
+  --color-blue-900: oklch(88.2% 0.059 254.128);
+  --color-violet-600: oklch(70.2% 0.183 293.541);
+  --color-violet-700: oklch(70.2% 0.183 293.541);
+  --color-violet-800: oklch(81.1% 0.111 293.571);
+  --color-violet-900: oklch(89.4% 0.057 293.283);
+  --color-orange-600: oklch(75% 0.183 55.934);
+  --color-orange-700: oklch(75% 0.183 55.934);
+  --color-orange-800: oklch(83.7% 0.128 66.29);
+  --color-orange-900: oklch(90.1% 0.076 70.697);
 }
 
 @layer base {
