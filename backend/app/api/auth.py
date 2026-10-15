@@ -106,7 +106,10 @@ class RefreshIn(BaseModel):
 
 
 class PasswordIn(BaseModel):
-    current_password: str = Field(max_length=128)
+    """A new password from the account: confirmed with a code sent to the user's e-mail (POST /password/code),
+    not with the current password, so a forgotten one is no obstacle and an open session alone is not enough."""
+
+    code: str = Field(pattern=r"^\d{6}$")
     new_password: str = Field(min_length=8, max_length=128)
 
 
@@ -391,9 +394,8 @@ async def update_me(body: ProfileIn, user: CurrentUser, session: Session):
 
 @router.post("/password", response_model=TokenOut)
 async def change_password(body: PasswordIn, user: CurrentUser, request: Request, response: Response, session: Session):
-    """Changes the password and ends all other sessions."""
-    if not verify_password(user, body.current_password):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is wrong")
+    """Changes the password and ends all other sessions; this one gets new tokens."""
+    await _use_code(session, user.email, RESET, body.code)
     user.password_hash = hash_password(body.new_password)
     await revoke_all(session, user.id)
     pair = await issue_tokens(session, user, user_agent=request.headers.get("user-agent"))

@@ -7,9 +7,10 @@ import { toast } from "sonner";
 
 import { PageHeading } from "@/components/account/account-shell";
 import { ACCOUNT_CARD, CARD_HEAD, CardRow, Pill } from "@/components/account/ui";
-import { errorMessage, hasStatus } from "@/components/shop/errors";
-import { describedBy, Field, FIELD, FormError, PASSWORD_MIN, PasswordInput, phoneError, type FieldErrors } from "@/components/shop/form";
+import { errorMessage } from "@/components/shop/errors";
+import { describedBy, Field, FIELD, FormError, phoneError, type FieldErrors } from "@/components/shop/form";
 import { ORG_STATUS } from "@/components/shop/labels";
+import { ResetPasswordDialog } from "@/components/shop/reset-password";
 import { useSession } from "@/components/shop/session-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -196,7 +197,7 @@ function OrganizationsCard() {
 // --- security --------------------------------------------------------------------------------
 
 function SecurityCard() {
-  const { logout } = useSession();
+  const { user, logout } = useSession();
   const [dialog, setDialog] = useState<"password" | "everywhere" | null>(null);
   const [leaving, setLeaving] = useState(false);
   const leave = (everywhere: boolean) => {
@@ -249,7 +250,7 @@ function SecurityCard() {
           <span className="font-normal text-muted-foreground">Выход только на этом устройстве</span>
         </CardRow>
       </CardContent>
-      <PasswordDialog open={dialog === "password"} onOpenChange={(o) => setDialog(o ? "password" : null)} />
+      <ResetPasswordDialog account initialEmail={user?.email ?? ""} open={dialog === "password"} onOpenChange={(o) => setDialog(o ? "password" : null)} />
       <Dialog open={dialog === "everywhere"} onOpenChange={(o) => setDialog(o ? "everywhere" : null)}>
         <DialogContent className="gap-5 p-5 sm:max-w-md sm:p-6">
           <DialogHeader>
@@ -268,84 +269,5 @@ function SecurityCard() {
         </DialogContent>
       </Dialog>
     </Card>
-  );
-}
-
-function PasswordDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  const { changePassword } = useSession();
-  const [errors, setErrors] = useState<FieldErrors<"current" | "next">>({});
-  const [formError, setFormError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  async function onSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const data = new FormData(e.currentTarget);
-    const current = String(data.get("current") ?? "");
-    const next = String(data.get("next") ?? "");
-    const found = {
-      current: current ? undefined : "Введите текущий пароль",
-      next: next.length < PASSWORD_MIN ? `Не короче ${PASSWORD_MIN} символов` : next.length > 128 ? "Слишком длинный пароль" : undefined,
-    };
-    setErrors(found);
-    setFormError(null);
-    if (found.current || found.next) return;
-    setSaving(true);
-    try {
-      await changePassword(current, next);
-      toast.success("Пароль изменён. На других устройствах нужно войти заново.");
-      onOpenChange(false);
-    } catch (err) {
-      if (hasStatus(err, 400)) setErrors({ current: "Текущий пароль указан неверно" });
-      else setFormError(errorMessage(err, "Не удалось изменить пароль. Попробуйте ещё раз."));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        if (!o) setErrors({});
-        onOpenChange(o);
-      }}
-    >
-      <DialogContent className="gap-5 p-5 sm:max-w-md sm:p-6">
-        <DialogHeader>
-          <DialogTitle className="text-lg font-semibold">Новый пароль</DialogTitle>
-          <DialogDescription>После смены на других устройствах нужно будет войти заново.</DialogDescription>
-        </DialogHeader>
-        <form id="password-form" noValidate onSubmit={onSubmit} className="space-y-4">
-          <Field id="pw-current" label="Текущий пароль" error={errors.current}>
-            <PasswordInput
-              name="current"
-              autoComplete="current-password"
-              maxLength={128}
-              onChange={() => errors.current && setErrors((e) => ({ ...e, current: undefined }))}
-              {...describedBy("pw-current", errors.current)}
-            />
-          </Field>
-          <Field id="pw-next" label="Новый пароль" error={errors.next} hint={`Не короче ${PASSWORD_MIN} символов`}>
-            <PasswordInput
-              name="next"
-              autoComplete="new-password"
-              maxLength={128}
-              onChange={() => errors.next && setErrors((e) => ({ ...e, next: undefined }))}
-              {...describedBy("pw-next", errors.next, true)}
-            />
-          </Field>
-          {formError && <FormError>{formError}</FormError>}
-        </form>
-        <DialogFooter className="-mx-5 -mb-5 rounded-b-xl px-5 sm:-mx-6 sm:-mb-6 sm:px-6">
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
-            Отмена
-          </Button>
-          <Button type="submit" form="password-form" disabled={saving}>
-            {saving && <LoaderCircle className="animate-spin" />}
-            Сменить пароль
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

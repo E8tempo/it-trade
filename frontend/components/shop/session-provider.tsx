@@ -86,7 +86,8 @@ type SessionValue = {
   /** Ends this session (or all of them) and reloads the page. */
   logout: (options?: { everywhere?: boolean }) => Promise<void>;
   saveProfile: (data: { name: string | null; phone: string | null }) => Promise<User>;
-  changePassword: (current: string, next: string) => Promise<void>;
+  /** a new password confirmed with the code sent to the user's e-mail (POST /api/auth/password/code) */
+  changePassword: (code: string, next: string) => Promise<void>;
   /** Call before a request made on the user's behalf; false if the session turned out to be over. */
   keepSession: () => Promise<boolean>;
   /** the user's organizations; null for a guest and until loaded */
@@ -357,13 +358,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   );
 
   const changePassword = useCallback(
-    async (current: string, next: string) => {
+    async (code: string, next: string) => {
       await keepSession();
       // other sessions end; this one gets new tokens
       signedIn(
         await api<AuthTokens>("/api/auth/password", {
           method: "POST",
-          body: JSON.stringify({ current_password: current, new_password: next }),
+          body: JSON.stringify({ code, new_password: next }),
         }),
       );
     },

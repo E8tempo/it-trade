@@ -94,9 +94,13 @@ async def test_change_password_ends_other_sessions(client):
     old_refresh, access = r["refresh_token"], r["access_token"]
     client.cookies.clear()
     h = {"Authorization": f"Bearer {access}"}
-    wrong = await client.post("/api/auth/password", json={"current_password": "nope", "new_password": "secret-456"}, headers=h)
-    assert wrong.status_code == 400
-    ok = await client.post("/api/auth/password", json={"current_password": "secret-123", "new_password": "secret-456"}, headers=h)
+    # confirmed with a code sent to the e-mail, not with the current password
+    assert (await client.post("/api/auth/password", json={"code": "123456", "new_password": "secret-456"}, headers=h)).status_code == 400
+    assert (await client.post("/api/auth/password/code", json={"email": "pw@example.com"})).status_code == 200
+    from conftest import OUTBOX
+
+    code = re.search(r"\b(\d{6})\b", OUTBOX[-1][2]).group(1)
+    ok = await client.post("/api/auth/password", json={"code": code, "new_password": "secret-456"}, headers=h)
     assert ok.status_code == 200
     client.cookies.clear()
     assert (await client.post("/api/auth/refresh", json={"refresh_token": old_refresh})).status_code == 401

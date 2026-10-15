@@ -74,7 +74,7 @@ export function CodeCells({
   error?: string;
   resendIn: number; // seconds until another code; 0: now
   onResend: () => void;
-  onOtherEmail: () => void;
+  onOtherEmail?: () => void; // none: the address cannot be changed here
   disabled?: boolean;
 }) {
   const invalid = error ? true : undefined;
@@ -121,10 +121,15 @@ export function CodeCells({
             отправьте снова
           </button>
         )}
-        .{" "}
-        <button type="button" onClick={onOtherEmail} className="font-medium text-primary hover:underline">
-          Другой e-mail
-        </button>
+        .
+        {onOtherEmail && (
+          <>
+            {" "}
+            <button type="button" onClick={onOtherEmail} className="font-medium text-primary hover:underline">
+              Другой e-mail
+            </button>
+          </>
+        )}
       </p>
     </div>
   );
