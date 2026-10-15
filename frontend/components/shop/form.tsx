@@ -9,6 +9,8 @@ import { cn } from "@/lib/utils";
 
 /** Inputs of the shop's forms: taller than the admin panel's, comfortable for a thumb. */
 export const FIELD = "h-11 rounded-xl px-3.5";
+/** The main button of a form: as tall as the fields. */
+export const SUBMIT = "h-11 w-full gap-2 rounded-xl text-[15px]";
 
 export type FieldErrors<K extends string> = Partial<Record<K, string>>;
 

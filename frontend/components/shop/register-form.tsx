@@ -1,19 +1,18 @@
 "use client";
 
-import { REGEXP_ONLY_DIGITS } from "input-otp";
 import { ArrowLeft, ArrowRight, Building2, LoaderCircle, PencilLine, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { compact, innError, KPP } from "@/components/account/requisites";
-import { SUBMIT, text, useLeaveWhenSignedIn } from "@/components/shop/auth-forms";
+import { text, useLeaveWhenSignedIn } from "@/components/shop/auth-forms";
+import { CodeCells, SentTo, StepHeader, useCountdown } from "@/components/shop/code-steps";
 import { errorMessage, hasStatus } from "@/components/shop/errors";
-import { describedBy, emailError, Field, FIELD, FormError, PASSWORD_MIN, PasswordInput, phoneError, type FieldErrors } from "@/components/shop/form";
+import { describedBy, emailError, Field, FIELD, FormError, PASSWORD_MIN, PasswordInput, phoneError, SUBMIT, type FieldErrors } from "@/components/shop/form";
 import { authHref, nextFromLocation } from "@/components/shop/next-url";
 import { useSession } from "@/components/shop/session-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { InputOTP, InputOTPGroup, InputOTPSeparator, InputOTPSlot } from "@/components/ui/input-otp";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
@@ -55,8 +54,6 @@ const LEADS = [
 const CODE_TTL_MS = 15 * 60_000; // as the backend's CODE_TTL: a code sent earlier is still good
 
 /** The code sent to an address (POST /api/auth/register/code). */
-const OTP_SLOT = "size-12 text-xl font-semibold first:rounded-l-xl last:rounded-r-xl sm:size-13";
-
 type SentCode = { email: string; at: number; resendAt: number };
 
 /**
@@ -77,7 +74,6 @@ export function RegisterForm() {
   const [pending, setPending] = useState(false);
   const [sent, setSent] = useState<SentCode | null>(null);
   const [code, setCode] = useState("");
-  const [now, setNow] = useState(0); // ticks while a resend waits
   const formRef = useRef<HTMLFormElement>(null);
   const focusStep = useRef(false);
   useLeaveWhenSignedIn();
@@ -88,19 +84,7 @@ export function RegisterForm() {
   const confirming = step === 1 && !!found && !manual;
   const registered = !!lookup?.result?.registered;
   const titles = ["Ваша организация", confirming ? "Это ваша организация?" : "Реквизиты организации", "Контактное лицо", "Вход в кабинет", "Подтвердите почту"];
-  const resendIn = sent ? Math.max(0, Math.ceil((sent.resendAt - now) / 1000)) : 0;
-
-  // the countdown to another code
-  useEffect(() => {
-    if (step !== CODE_STEP || !sent) return;
-    const tick = () => setNow(Date.now());
-    const first = setTimeout(tick, 0);
-    const timer = setInterval(tick, 1000);
-    return () => {
-      clearTimeout(first);
-      clearInterval(timer);
-    };
-  }, [step, sent]);
+  const resendIn = useCountdown(sent?.resendAt ?? null, step === CODE_STEP);
 
   // the first field of a step that just opened (or its first error)
   useEffect(() => {
@@ -173,7 +157,6 @@ export function RegisterForm() {
       const r = await api<{ email: string; resend_in: number }>("/api/auth/register/code", { method: "POST", body: JSON.stringify({ email }) });
       const at = Date.now();
       setSent({ email: r.email, at, resendAt: at + r.resend_in * 1000 });
-      setNow(at);
       setErrors((prev) => ({ ...prev, code: undefined }));
       setCode("");
       if (step !== CODE_STEP) goTo(CODE_STEP);
@@ -260,23 +243,13 @@ export function RegisterForm() {
 
   return (
     <form ref={formRef} method="post" noValidate onSubmit={onSubmit} className="space-y-5">
-      <div>
-        <div className="grid grid-cols-5 gap-1.5" aria-hidden>
-          {titles.map((t, i) => (
-            <span key={i} className={cn("h-1 rounded-full transition-colors duration-300", i <= step ? "bg-primary" : "bg-muted")} />
-          ))}
-        </div>
-        <p className="mt-5 text-[13px] text-muted-foreground tabular-nums">
-          Регистрация · шаг {step + 1} из {titles.length}
-        </p>
-        <h1 className="mt-1 text-[24px] leading-tight font-semibold tracking-tight">{titles[step]}</h1>
-        {LEADS[step] && <p className="mt-1.5 text-[15px] leading-relaxed text-muted-foreground">{LEADS[step]}</p>}
-        {step === CODE_STEP && sent && (
-          <p className="mt-1.5 text-[15px] leading-relaxed text-muted-foreground">
-            Отправили 6 цифр на <span className="font-medium break-all text-foreground">{sent.email}</span>
-          </p>
-        )}
-      </div>
+      <StepHeader
+        flow="Регистрация"
+        step={step}
+        steps={titles.length}
+        title={titles[step]}
+        lead={step === CODE_STEP && sent ? <SentTo email={sent.email} /> : LEADS[step]}
+      />
 
       {/* 1. ИНН */}
       <fieldset hidden={step !== 0} className="space-y-4">
@@ -407,58 +380,22 @@ export function RegisterForm() {
       </fieldset>
 
       {/* 5. the code sent to the e-mail */}
-      <fieldset hidden={step !== CODE_STEP} className="space-y-4">
+      <fieldset hidden={step !== CODE_STEP}>
         <legend className="sr-only">Код из письма</legend>
-        <div className="flex flex-col items-center gap-2">
-          <InputOTP
-            name="code"
-            maxLength={6}
-            pattern={REGEXP_ONLY_DIGITS}
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            value={code}
-            onChange={(v) => {
-              setCode(v);
-              if (errors.code) setErrors((prev) => ({ ...prev, code: undefined }));
-            }}
-            // all six typed or pasted: on at once
-            onComplete={() => !pending && formRef.current?.requestSubmit()}
-            aria-label="Код из письма"
-            aria-invalid={errors.code ? true : undefined}
-            aria-describedby={errors.code ? "reg-code-error" : undefined}
-          >
-            <InputOTPGroup>
-              {[0, 1, 2].map((i) => (
-                <InputOTPSlot key={i} index={i} aria-invalid={errors.code ? true : undefined} className={OTP_SLOT} />
-              ))}
-            </InputOTPGroup>
-            <InputOTPSeparator className="px-1 text-muted-foreground" />
-            <InputOTPGroup>
-              {[3, 4, 5].map((i) => (
-                <InputOTPSlot key={i} index={i} aria-invalid={errors.code ? true : undefined} className={OTP_SLOT} />
-              ))}
-            </InputOTPGroup>
-          </InputOTP>
-          {errors.code && (
-            <p id="reg-code-error" className="text-center text-[13px] text-destructive">
-              {errors.code}
-            </p>
-          )}
-        </div>
-        <p className="text-center text-sm text-muted-foreground">
-          Не пришло? Проверьте «Спам» или{" "}
-          {resendIn > 0 ? (
-            <span className="tabular-nums">отправьте снова через {resendIn} с</span>
-          ) : (
-            <button type="button" disabled={pending} onClick={() => void sendCode(true)} className="font-medium text-primary hover:underline">
-              отправьте снова
-            </button>
-          )}
-          .{" "}
-          <button type="button" onClick={() => goTo(3)} className="font-medium text-primary hover:underline">
-            Другой e-mail
-          </button>
-        </p>
+        <CodeCells
+          name="code"
+          value={code}
+          onChange={(v) => {
+            setCode(v);
+            if (errors.code) setErrors((prev) => ({ ...prev, code: undefined }));
+          }}
+          onComplete={() => formRef.current?.requestSubmit()}
+          error={errors.code}
+          resendIn={resendIn}
+          onResend={() => void sendCode(true)}
+          onOtherEmail={() => goTo(3)}
+          disabled={pending}
+        />
       </fieldset>
 
       {error && <FormError>{error}</FormError>}

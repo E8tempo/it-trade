@@ -1,3 +1,4 @@
+import re
 from datetime import timedelta
 
 import pytest
@@ -227,3 +228,35 @@ async def test_code_attempts_run_out(client, monkeypatch):
     # even the right code does not help now: brute force over a million codes is cut at a few tries
     r = await client.post("/api/auth/register", json={"email": "brute@example.com", "code": code, "password": "secret-123", "organization": org})
     assert r.status_code == 400 and "Запросите новый код" in r.json()["detail"]
+
+
+async def test_password_reset_with_a_code(client):
+    from conftest import OUTBOX
+
+    await register(client, "forgot@example.com", password="old-pass-123")
+    client.cookies.clear()
+    old_session = (await client.post("/api/auth/login", json={"email": "forgot@example.com", "password": "old-pass-123"})).json()
+
+    # an address without an account gets the same answer, and no letter
+    sent = len(OUTBOX)
+    r = await client.post("/api/auth/password/code", json={"email": "nobody@example.com"})
+    assert r.status_code == 200 and len(OUTBOX) == sent
+    assert (await client.post("/api/auth/password/code", json={"email": "nobody@example.com"})).status_code == 429  # the same pause
+
+    r = await client.post("/api/auth/password/code", json={"email": "Forgot@example.com"})
+    assert r.status_code == 200 and OUTBOX[-1][0] == "forgot@example.com" and "восстановления пароля" in OUTBOX[-1][2]
+    code = re.search(r"\b(\d{6})\b", OUTBOX[-1][2]).group(1)
+    wrong = "000000" if code != "000000" else "111111"
+    # the code is checked before the new password is asked for, and stays good for it
+    assert (await client.post("/api/auth/password/check", json={"email": "forgot@example.com", "code": wrong})).status_code == 400
+    assert (await client.post("/api/auth/password/check", json={"email": "forgot@example.com", "code": code})).status_code == 204
+    # a made-up code does not reset
+    assert (await client.post("/api/auth/password/reset", json={"email": "forgot@example.com", "code": "123456", "new_password": "x" * 8})).status_code == 400
+    r = await client.post("/api/auth/password/reset", json={"email": "forgot@example.com", "code": code, "new_password": "new-pass-456"})
+    assert r.status_code == 204
+    # used up; the old password and the old sessions are gone
+    r = await client.post("/api/auth/password/reset", json={"email": "forgot@example.com", "code": code, "new_password": "other-pass-789"})
+    assert r.status_code == 400
+    assert (await client.post("/api/auth/login", json={"email": "forgot@example.com", "password": "old-pass-123"})).status_code == 401
+    assert (await client.post("/api/auth/login", json={"email": "forgot@example.com", "password": "new-pass-456"})).status_code == 200
+    assert (await client.post("/api/auth/refresh", json={"refresh_token": old_session["refresh_token"]})).status_code == 401

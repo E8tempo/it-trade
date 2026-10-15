@@ -87,6 +87,15 @@ class SignupCodeOut(BaseModel):
     expires_in: int
 
 
+class ResetCheckIn(BaseModel):
+    email: EmailStr
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+class ResetIn(ResetCheckIn):
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class LoginIn(BaseModel):
     email: EmailStr
     password: str = Field(max_length=128)
@@ -134,7 +143,7 @@ CODE_TTL = timedelta(minutes=15)
 CODE_RESEND = timedelta(seconds=60)
 CODE_ATTEMPTS = 5  # wrong tries of one code; then a new one is needed
 CODES_PER_HOUR = 5  # per address: nobody's mailbox gets flooded with codes
-SIGNUP = "signup"
+SIGNUP, RESET = "signup", "reset"
 
 
 def _code_hash(email: str, code: str) -> str:
@@ -148,8 +157,8 @@ async def _latest_code(session, email: str, purpose: str) -> EmailCode | None:
     )
 
 
-async def _use_code(session, email: str, purpose: str, code: str) -> None:
-    """Accepts the latest code sent to the address (it is used up), or 400 saying what to do."""
+async def _use_code(session, email: str, purpose: str, code: str, consume: bool = True) -> None:
+    """Accepts the latest code sent to the address (used up unless `consume` is false), or 400 saying what to do."""
     row = await _latest_code(session, email, purpose)
     if row is None or row.used_at is not None or row.expires_at <= utcnow():
         raise HTTPException(400, "Код устарел. Запросите новый.")
@@ -160,20 +169,30 @@ async def _use_code(session, email: str, purpose: str, code: str) -> None:
         await session.commit()
         left = CODE_ATTEMPTS - row.attempts
         raise HTTPException(400, f"Неверный код. Осталось попыток: {left}." if left else "Неверный код. Запросите новый.")
-    row.used_at = utcnow()
+    if consume:
+        row.used_at = utcnow()
 
 
-def _code_letter(code: str) -> tuple[str, str, str]:
+# what the code is for, and what to do if the letter was not expected
+LETTERS = {
+    SIGNUP: ("Ваш код для регистрации на сайте IT Trade:", "Если вы не регистрировались, просто удалите это письмо."),
+    RESET: (
+        "Ваш код для восстановления пароля на сайте IT Trade:",
+        "Если вы не просили сменить пароль, просто удалите это письмо: пароль останется прежним.",
+    ),
+}
+
+
+def _code_letter(code: str, purpose: str) -> tuple[str, str, str]:
+    what, ignore = LETTERS[purpose]
+    minutes = int(CODE_TTL.total_seconds() // 60)
     subject = f"Код подтверждения: {code}"
-    text = (
-        f"Здравствуйте!\n\nВаш код для регистрации на сайте IT Trade: {code}\n\n"
-        f"Код действует {int(CODE_TTL.total_seconds() // 60)} минут. Если вы не регистрировались, просто удалите это письмо.\n"
-    )
+    text = f"Здравствуйте!\n\n{what} {code}\n\nКод действует {minutes} минут. {ignore}\n"
     html = (
         '<div style="font-family:Arial,sans-serif;font-size:15px;color:#111">'
-        "<p>Здравствуйте!</p><p>Ваш код для регистрации на сайте IT Trade:</p>"
+        f"<p>Здравствуйте!</p><p>{what}</p>"
         f'<p style="font-size:28px;font-weight:bold;letter-spacing:6px">{code}</p>'
-        f"<p>Код действует {int(CODE_TTL.total_seconds() // 60)} минут. Если вы не регистрировались, просто удалите это письмо.</p></div>"
+        f"<p>Код действует {minutes} минут. {ignore}</p></div>"
     )
     return subject, text, html
 
@@ -220,13 +239,49 @@ async def company(inn: Annotated[str, Query(pattern=r"^\d{10}(\d{2})?$")], reque
 @router.post("/register/code", response_model=SignupCodeOut)
 async def signup_code(body: SignupCodeIn, request: Request, session: Session):
     """Sends a code to the address registering: the account is created with it only (POST /register)."""
-    key = f"code:{client_ip(request)}"
-    _check_throttle(key)
+    _check_throttle(f"code:{client_ip(request)}")
     email = normalize_email(body.email)
     if await session.scalar(select(User.id).where(User.email == email)):
         raise HTTPException(status.HTTP_409_CONFLICT, "Email is already registered")
+    return await _send_code(session, request, email, SIGNUP)
+
+
+@router.post("/password/code", response_model=SignupCodeOut)
+async def reset_code(body: SignupCodeIn, request: Request, session: Session):
+    """«Забыли пароль?»: a code to the address, if it has an account. The answer is the same either way, so the
+    form does not tell which addresses are registered."""
+    _check_throttle(f"code:{client_ip(request)}")
+    email = normalize_email(body.email)
+    user = await session.scalar(select(User).where(User.email == email))
+    # no account: a code is still recorded, never sent, so the pauses and limits are the same as for a real one
+    return await _send_code(session, request, email, RESET, deliver=user is not None and user.is_active)
+
+
+@router.post("/password/check", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_check(body: ResetCheckIn, session: Session):
+    """Tells the form whether the code is right before the new password is asked for; a wrong one counts as a
+    try. The code stays valid for POST /password/reset."""
+    await _use_code(session, normalize_email(body.email), RESET, body.code, consume=False)
+
+
+@router.post("/password/reset", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_password(body: ResetIn, session: Session):
+    """A new password with the code sent to the address; all sessions end (the form signs in afterwards)."""
+    email = normalize_email(body.email)
+    await _use_code(session, email, RESET, body.code)
+    user = await session.scalar(select(User).where(User.email == email))
+    if user is None or not user.is_active:
+        raise HTTPException(400, "Код устарел. Запросите новый.")
+    user.password_hash = hash_password(body.new_password)
+    await revoke_all(session, user.id)
+    await session.commit()
+    _failures.pop(f"email:{email}", None)  # failed logins before the reset do not lock the new password out
+
+
+async def _send_code(session, request: Request, email: str, purpose: str, deliver: bool = True) -> SignupCodeOut:
+    key = f"code:{client_ip(request)}"
     now = utcnow()
-    last = await _latest_code(session, email, SIGNUP)
+    last = await _latest_code(session, email, purpose)
     if last is not None and now - last.created_at < CODE_RESEND:
         wait = int((CODE_RESEND - (now - last.created_at)).total_seconds()) + 1
         raise HTTPException(429, f"Новый код можно запросить через {wait} с", headers={"Retry-After": str(wait)})
@@ -237,10 +292,11 @@ async def signup_code(body: SignupCodeIn, request: Request, session: Session):
         raise HTTPException(429, "На этот адрес уже отправлено много кодов. Попробуйте через час.")
     _record_failure(key)  # every code sent counts against the address it is asked from
     code = f"{secrets.randbelow(1_000_000):06d}"
-    session.add(EmailCode(email=email, purpose=SIGNUP, code_hash=_code_hash(email, code), expires_at=now + CODE_TTL))
+    session.add(EmailCode(email=email, purpose=purpose, code_hash=_code_hash(email, code), expires_at=now + CODE_TTL))
     await session.flush()
     try:
-        await send_mail(email, *_code_letter(code))
+        if deliver:
+            await send_mail(email, *_code_letter(code, purpose))
     except MailError:
         await session.rollback()
         raise HTTPException(503, "Не удалось отправить письмо. Проверьте адрес или попробуйте позже.") from None

@@ -3,17 +3,16 @@
 import { LoaderCircle } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { errorMessage, hasStatus } from "@/components/shop/errors";
-import { Field, FIELD, FormError, PasswordInput } from "@/components/shop/form";
+import { Field, FIELD, FormError, PasswordInput, SUBMIT } from "@/components/shop/form";
 import { authHref, nextFromLocation, safeNext } from "@/components/shop/next-url";
+import { ResetPasswordDialog } from "@/components/shop/reset-password";
 import { useSession } from "@/components/shop/session-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-
-export const SUBMIT = "h-11 w-full gap-2 rounded-xl text-[15px]";
 
 /** Signed in (already, or just now): on to ?next=, by default the account. */
 export function useLeaveWhenSignedIn() {
@@ -32,6 +31,9 @@ export function LoginForm() {
   const { login } = useSession();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const formRef = useRef<HTMLFormElement>(null);
   useLeaveWhenSignedIn();
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
@@ -63,8 +65,9 @@ export function LoginForm() {
   }
 
   return (
-    // method="post": if the page's JS fails to load, the browser must not put the password in the URL
-    <form method="post" noValidate onSubmit={onSubmit} className="space-y-4">
+    <>
+    {/* method="post": if the page's JS fails to load, the browser must not put the password in the URL */}
+    <form ref={formRef} method="post" noValidate onSubmit={onSubmit} className="space-y-4">
       <Field id="login-email" label="E-mail">
         <Input
           id="login-email"
@@ -78,15 +81,29 @@ export function LoginForm() {
           className={FIELD}
         />
       </Field>
-      <Field id="login-password" label="Пароль">
-        <PasswordInput id="login-password" name="password" autoComplete="current-password" required />
-      </Field>
+      <div className="relative">
+        <Field id="login-password" label="Пароль">
+          <PasswordInput id="login-password" name="password" autoComplete="current-password" required />
+        </Field>
+        <button
+          type="button"
+          onClick={() => {
+            setResetEmail(String(new FormData(formRef.current!).get("email") ?? "").trim());
+            setResetOpen(true);
+          }}
+          className="absolute top-0 right-0 text-sm font-medium text-primary hover:underline"
+        >
+          Забыли пароль?
+        </button>
+      </div>
       {error && <FormError>{error}</FormError>}
       <Button type="submit" className={SUBMIT} disabled={pending}>
         {pending && <LoaderCircle className="animate-spin" />}
         Войти
       </Button>
     </form>
+      <ResetPasswordDialog open={resetOpen} onOpenChange={setResetOpen} initialEmail={resetEmail} />
+    </>
   );
 }
 
