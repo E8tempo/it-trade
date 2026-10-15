@@ -4,7 +4,6 @@ import { Suspense, type ReactNode } from "react";
 
 import { AuthSwitchLink, AuthTabs } from "@/components/shop/auth-forms";
 import { SITE_NAME } from "@/lib/site";
-import { cn } from "@/lib/utils";
 
 const POINTS: [LucideIcon, string, string][] = [
   [BadgePercent, "Оптовые цены", "Цены вашей организации — за наличные и по безналу — во всём каталоге"],
@@ -20,20 +19,19 @@ export function AuthPage({
   page,
   title,
   lead,
-  wide,
   children,
 }: {
   page: "/login" | "/register";
   title: string;
   lead: string;
-  wide?: boolean; // the registration form, in two columns
   children: ReactNode;
 }) {
   const [question, action, other] =
     page === "/login" ? ["Нет аккаунта?", "Зарегистрируйте организацию", "/register" as const] : ["Уже есть аккаунт?", "Войдите", "/login" as const];
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-6 sm:px-6 sm:py-10 lg:flex-row lg:items-center lg:gap-14 lg:py-12">
-      <aside className="text-white lg:flex-1">
+    // the card's top stays put on wide screens: the tabs do not move when the two pages differ in height
+    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-6 sm:px-6 sm:py-10 lg:flex-row lg:items-start lg:gap-14 lg:pt-[max(3rem,14vh)]">
+      <aside className="text-white lg:flex-1 lg:pt-8">
         <div className="flex items-center gap-2.5 font-semibold tracking-tight">
           <span className="grid size-9 place-items-center rounded-xl bg-white text-[13px] font-bold text-slate-900">IT</span>
           <span className="text-lg">{SITE_NAME}</span>
@@ -59,12 +57,8 @@ export function AuthPage({
         </ul>
       </aside>
 
-      <section
-        className={cn(
-          "w-full self-center rounded-3xl bg-background p-6 shadow-2xl shadow-slate-950/30 sm:p-8",
-          wide ? "max-w-[46rem]" : "max-w-[27rem]",
-        )}
-      >
+      {/* one width for both pages: switching between them is not a jump */}
+      <section className="w-full max-w-[27rem] self-center rounded-3xl lg:self-start bg-background p-6 shadow-2xl shadow-slate-950/30 sm:p-8">
         {/* keeps ?next=, which is only known in the browser */}
         <Suspense fallback={<div className="h-10" />}>
           <AuthTabs active={page} />

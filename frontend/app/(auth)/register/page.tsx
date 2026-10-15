@@ -9,9 +9,8 @@ export default function RegisterPage() {
   return (
     <AuthPage
       page="/register"
-      wide
       title="Регистрация организации"
-      lead="Для компаний и ИП. Менеджер проверит организацию в рабочее время — после этого откроются цены и заказы."
+      lead="Для компаний и ИП. Менеджер проверит организацию, и откроются цены и заказы."
     >
       <RegisterForm />
     </AuthPage>

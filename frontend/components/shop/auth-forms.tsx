@@ -1,9 +1,9 @@
 "use client";
 
-import { LoaderCircle } from "lucide-react";
+import { ArrowLeft, ArrowRight, LoaderCircle } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { errorMessage, hasStatus } from "@/components/shop/errors";
 import {
@@ -102,52 +102,95 @@ export function LoginForm() {
 }
 
 type RegisterField = "inn" | "org" | "kpp" | "name" | "email" | "phone" | "password";
-const REGISTER_FIELDS: RegisterField[] = ["inn", "org", "kpp", "name", "phone", "email", "password"];
+// the two steps of the form, in the order of their fields
+const STEPS: { title: string; fields: RegisterField[] }[] = [
+  { title: "Организация", fields: ["inn", "org", "kpp"] },
+  { title: "Контактное лицо", fields: ["name", "phone", "email", "password"] },
+];
 
-/** A client registers with their organization: they become its head, and a manager checks it. */
+type RegisterValues = Record<RegisterField, string>;
+
+function registerValues(form: HTMLFormElement, soleTrader: boolean): RegisterValues {
+  const data = new FormData(form); // the hidden step's inputs are in it too
+  return {
+    inn: compact(text(data, "inn")),
+    org: text(data, "org").trim(),
+    kpp: soleTrader ? "" : compact(text(data, "kpp")),
+    name: text(data, "name").trim(),
+    email: text(data, "email").trim(),
+    phone: text(data, "phone").trim(),
+    password: text(data, "password"),
+  };
+}
+
+function registerErrors(v: RegisterValues): FieldErrors<RegisterField> {
+  return {
+    inn: innError(v.inn),
+    org: v.org.length < 2 ? "Укажите название, как в документах" : v.org.length > 255 ? "Слишком длинное название" : undefined,
+    kpp: v.kpp && !KPP.test(v.kpp) ? "КПП — 9 символов" : undefined,
+    name: !v.name ? "Укажите, как к вам обращаться" : v.name.length > 255 ? "Слишком длинное имя" : undefined,
+    email: emailError(v.email, true),
+    phone: phoneError(v.phone, true),
+    password:
+      v.password.length < PASSWORD_MIN
+        ? `Пароль должен быть не короче ${PASSWORD_MIN} символов`
+        : v.password.length > 128
+          ? "Слишком длинный пароль"
+          : undefined,
+  };
+}
+
+/**
+ * A client registers with their organization: they become its head, and a manager checks it. Two steps in the
+ * login's narrow card — the organization, then the contact person — so switching from login is not a jump.
+ */
 export function RegisterForm() {
   const { register } = useSession();
+  const [step, setStep] = useState(0);
   const [errors, setErrors] = useState<FieldErrors<RegisterField>>({});
   const [error, setError] = useState<ReactNode>(null);
   const [pending, setPending] = useState(false);
   const [inn, setInn] = useState("");
   const soleTrader = compact(inn).length === 12;
+  const formRef = useRef<HTMLFormElement>(null);
+  const focusOnStep = useRef(false); // set when the step changes by a click, not on the first render
   useLeaveWhenSignedIn();
+
+  // the first field of a step that just opened (or its first error)
+  useEffect(() => {
+    if (!focusOnStep.current) return;
+    focusOnStep.current = false;
+    const first = STEPS[step].fields.find((k) => errors[k]) ?? STEPS[step].fields[0];
+    formRef.current?.querySelector<HTMLInputElement>(`[name="${first}"]`)?.focus();
+  }, [step, errors]);
+
+  function goTo(next: number) {
+    focusOnStep.current = true;
+    setStep(next);
+  }
+
+  /** Checks the fields of a step; true if they are fine. */
+  function check(stepFields: RegisterField[], values: RegisterValues): boolean {
+    const found = registerErrors(values);
+    const shown = Object.fromEntries(stepFields.map((k) => [k, found[k]])) as FieldErrors<RegisterField>;
+    setErrors((prev) => ({ ...prev, ...shown }));
+    const bad = stepFields.find((k) => found[k]);
+    if (bad) formRef.current?.querySelector<HTMLInputElement>(`[name="${bad}"]`)?.focus();
+    return !bad;
+  }
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = e.currentTarget;
-    const data = new FormData(form);
-    const values = {
-      inn: compact(text(data, "inn")),
-      org: text(data, "org").trim(),
-      kpp: soleTrader ? "" : compact(text(data, "kpp")),
-      name: text(data, "name").trim(),
-      email: text(data, "email").trim(),
-      phone: text(data, "phone").trim(),
-      password: text(data, "password"),
-    };
-    const found: FieldErrors<RegisterField> = {
-      inn: innError(values.inn),
-      org: values.org.length < 2 ? "Укажите название, как в документах" : values.org.length > 255 ? "Слишком длинное название" : undefined,
-      kpp: values.kpp && !KPP.test(values.kpp) ? "КПП — 9 символов" : undefined,
-      name: !values.name ? "Укажите, как к вам обращаться" : values.name.length > 255 ? "Слишком длинное имя" : undefined,
-      email: emailError(values.email, true),
-      phone: phoneError(values.phone, true),
-      password:
-        values.password.length < PASSWORD_MIN
-          ? `Пароль должен быть не короче ${PASSWORD_MIN} символов`
-          : values.password.length > 128
-            ? "Слишком длинный пароль"
-            : undefined,
-    };
-    const invalid = REGISTER_FIELDS.filter((k) => found[k]);
-    setErrors(found);
+    const values = registerValues(form, soleTrader);
     setError(null);
-    if (invalid.length) {
-      form.querySelector<HTMLInputElement>(`[name="${invalid[0]}"]`)?.focus();
+    if (step === 0) {
+      // Enter or «Далее» on the first step: on to the second
+      if (check(STEPS[0].fields, values)) goTo(1);
       return;
     }
+    if (!check(STEPS[1].fields, values)) return;
+    if (!check(STEPS[0].fields, values)) return goTo(0);
     setPending(true);
     try {
       await register({
@@ -161,7 +204,8 @@ export function RegisterForm() {
     } catch (err) {
       const message = errorMessage(err, "");
       if (hasStatus(err, 409) && message) {
-        setError(message); // the organization is already a client
+        setError(message); // the organization is already a client: its step
+        goTo(0);
       } else if (hasStatus(err, 409)) {
         const next = nextFromLocation("");
         setError(
@@ -183,9 +227,23 @@ export function RegisterForm() {
   }
 
   return (
-    <form method="post" noValidate onSubmit={onSubmit} className="grid grid-cols-1 gap-x-8 gap-y-6 md:grid-cols-2">
-      <fieldset className="space-y-4">
-        <legend className="mb-3 text-sm font-semibold">Организация</legend>
+    <form ref={formRef} method="post" noValidate onSubmit={onSubmit} className="space-y-5">
+      <div>
+        <div className="flex items-baseline justify-between text-sm">
+          <span className="font-semibold">{STEPS[step].title}</span>
+          <span className="text-muted-foreground tabular-nums">
+            Шаг {step + 1} из {STEPS.length}
+          </span>
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-1.5" aria-hidden>
+          {STEPS.map((st, i) => (
+            <span key={st.title} className={cn("h-1 rounded-full transition-colors duration-300", i <= step ? "bg-primary" : "bg-muted")} />
+          ))}
+        </div>
+      </div>
+
+      <fieldset hidden={step !== 0} className="space-y-4">
+        <legend className="sr-only">Организация</legend>
         <Field id="reg-inn" label="ИНН" error={errors.inn} hint="10 цифр у организации, 12 у ИП">
           <Input
             name="inn"
@@ -207,8 +265,9 @@ export function RegisterForm() {
           </Field>
         )}
       </fieldset>
-      <fieldset className="space-y-4">
-        <legend className="mb-3 text-sm font-semibold">Контактное лицо</legend>
+
+      <fieldset hidden={step !== 1} className="space-y-4">
+        <legend className="sr-only">Контактное лицо</legend>
         <Field id="reg-name" label="Имя" error={errors.name}>
           <Input name="name" autoComplete="name" maxLength={255} className={FIELD} {...describedBy("reg-name", errors.name)} />
         </Field>
@@ -241,15 +300,24 @@ export function RegisterForm() {
           <PasswordInput name="password" autoComplete="new-password" required {...describedBy("reg-password", errors.password, true)} />
         </Field>
       </fieldset>
-      {error && (
-        <div className="md:col-span-2">
-          <FormError>{error}</FormError>
+
+      {error && <FormError>{error}</FormError>}
+      {step === 0 ? (
+        <Button type="submit" className={SUBMIT}>
+          Далее
+          <ArrowRight />
+        </Button>
+      ) : (
+        <div className="flex gap-2">
+          <Button type="button" variant="outline" className="h-11 rounded-xl px-4" onClick={() => goTo(0)} disabled={pending} aria-label="Назад">
+            <ArrowLeft />
+          </Button>
+          <Button type="submit" className={cn(SUBMIT, "flex-1")} disabled={pending}>
+            {pending && <LoaderCircle className="animate-spin" />}
+            Зарегистрироваться
+          </Button>
         </div>
       )}
-      <Button type="submit" className={cn(SUBMIT, "md:col-span-2")} disabled={pending}>
-        {pending && <LoaderCircle className="animate-spin" />}
-        Зарегистрировать организацию
-      </Button>
     </form>
   );
 }
