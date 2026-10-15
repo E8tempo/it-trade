@@ -21,6 +21,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Suspense, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import { ThemeToggle } from "@/components/site/theme-toggle";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { SUPPLIERS, supplierSections } from "@/lib/admin/suppliers";
 import type { AdminUser } from "@/lib/admin/types";
@@ -247,6 +248,7 @@ export function AdminTopbar({ user }: { user: AdminUser }) {
       </Sheet>
       <div className="ml-auto flex items-center gap-3 text-sm">
         <span className="hidden text-muted-foreground sm:inline">{user.name || user.email}</span>
+        <ThemeToggle className="h-8 px-2 [&_svg]:size-4" />
         <Button variant="outline" size="sm" onClick={logout}>
           <LogOut />
           Выйти

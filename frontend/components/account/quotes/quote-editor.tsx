@@ -338,7 +338,7 @@ function LineRow({ quote, line, index, q }: { quote: Quote; line: QuoteLine; ind
           }}
           aria-label="Наименование"
           maxLength={1024}
-          className="min-h-0 resize-none rounded-lg border-transparent px-2 py-1.5 text-sm leading-snug font-medium shadow-none hover:border-input focus-visible:border-ring md:text-sm"
+          className="min-h-0 resize-none rounded-lg border-transparent bg-transparent px-2 py-1.5 text-sm leading-snug font-medium shadow-none hover:border-input focus-visible:border-ring md:text-sm dark:bg-transparent"
         />
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 text-xs text-muted-foreground tabular-nums">
           {!own && (line.part || line.vendor) && <span>{[line.vendor, line.part].filter(Boolean).join(" · ")}</span>}

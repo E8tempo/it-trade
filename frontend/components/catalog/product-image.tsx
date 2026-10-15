@@ -38,7 +38,8 @@ export function ProductImage({ image, alt, sizes, priority, className }: Props) 
 
   const { md, lg } = image.urls;
   return (
-    <div className="relative size-full">
+    // photos come on white: in the dark theme they keep a white tile, the multiply blend would darken them
+    <div className="relative size-full dark:rounded-[inherit] dark:bg-white">
       {status === "loading" && <div className="absolute inset-0 animate-pulse rounded-xl bg-foreground/[0.04]" aria-hidden />}
       {/* eslint-disable-next-line @next/next/no-img-element -- pre-optimised images, see above */}
       <img
@@ -56,7 +57,7 @@ export function ProductImage({ image, alt, sizes, priority, className }: Props) 
         onLoad={() => setStatus("loaded")}
         onError={() => setStatus("error")}
         className={cn(
-          "size-full object-contain mix-blend-multiply transition-opacity duration-300",
+          "size-full object-contain mix-blend-multiply transition-opacity duration-300 dark:mix-blend-normal",
           status === "loading" && "opacity-0",
           className,
         )}
