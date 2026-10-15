@@ -163,11 +163,8 @@ export function RegisterForm() {
       if (step !== CODE_STEP) goTo(CODE_STEP);
       else formRef.current?.querySelector<HTMLInputElement>('[name="code"]')?.focus();
     } catch (err) {
-      if (hasStatus(err, 409)) {
-        setError(alreadyRegistered());
-      } else {
-        setError(errorMessage(err, "Не удалось отправить код. Попробуйте ещё раз."));
-      }
+      // a registered address gets the same answer (and a letter saying so), not an error
+      setError(errorMessage(err, "Не удалось отправить код. Попробуйте ещё раз."));
     } finally {
       setPending(false);
     }

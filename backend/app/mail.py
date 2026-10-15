@@ -1,5 +1,6 @@
 """Outgoing mail over SMTP (settings: SMTP_*, MAIL_FROM). Without SMTP_HOST a letter is written to the log
-instead, so development needs no mail server: the code is in the API's output."""
+instead, so development needs no mail server: the code is in the API's output. In production a missing SMTP_HOST
+is an error, never the log."""
 
 import asyncio
 import logging
@@ -19,6 +20,10 @@ class MailError(Exception):
 
 async def send_mail(to: str, subject: str, text: str, html: str | None = None) -> None:
     s = get_settings()
+    if not s.smtp_host and s.is_prod:
+        # never into the log on a server: the codes would be readable by whoever reads the logs
+        log.error("mail to %s not sent: SMTP_HOST is not set", to)
+        raise MailError("SMTP_HOST is not set")
     if not s.smtp_host:
         log.warning("mail (SMTP_HOST is not set, not sent) to %s: %s\n%s", to, subject, text)
         return

@@ -135,7 +135,7 @@ async def test_registration_with_an_organization(client, admin, browser):
     trader = (await register(browser(), "trader@example.com", organization={**SOLE_TRADER, "kpp": "773601001"}))["user"]
     assert trader["email"] == "trader@example.com"
     r = await other.post("/api/auth/register", json={"email": "ivan@example.com", "code": "000000", "password": "secret-123", "organization": fresh()})
-    assert r.status_code == 409  # the e-mail
+    assert r.status_code == 400  # the e-mail is registered: refused like a wrong code, not told
 
 
 async def test_client_manages_organizations(client, admin, browser):

@@ -43,7 +43,7 @@ async def test_register_login_me_with_cookies_and_bearer(client):
 
     org = {"name": "ООО «Другая»", "inn": company_inn(9999)}
     dup = await client.post("/api/auth/register", json={"email": "ivan@example.com", "code": code, "password": "secret-123", "organization": org})
-    assert dup.status_code == 409
+    assert dup.status_code == 400  # the code is used up; a registered address is refused like a wrong code
     bad = await client.post("/api/auth/login", json={"email": "ivan@example.com", "password": "wrong-pass"})
     assert bad.status_code == 401
     ok = await client.post("/api/auth/login", json={"email": "IVAN@example.com", "password": "secret-123"})
@@ -201,7 +201,7 @@ async def test_registration_throttling(client):
     assert (await client.post("/api/auth/register/code", json={"email": "bot10@example.com"})).status_code == 429
 
 
-async def test_signup_needs_the_code_sent_to_the_address(client):
+async def test_signup_needs_the_code_sent_to_the_address(client, monkeypatch):
     org = {"name": "ООО «Код»", "inn": company_inn(8100)}
     body = {"email": "code@example.com", "password": "secret-123", "organization": org}
     # no code was sent to the address
@@ -217,8 +217,19 @@ async def test_signup_needs_the_code_sent_to_the_address(client):
     r = await client.post("/api/auth/register", json={**body, "code": code})
     assert r.status_code == 201, r.text
     client.cookies.clear()
-    # used up; and an address with an account gets no more codes
-    assert (await client.post("/api/auth/register/code", json={"email": "code@example.com"})).status_code == 409
+    # an address with an account: the same answer, a letter saying so and no code (the form does not tell whose
+    # addresses are registered, and nobody registers it again)
+    client.cookies.clear()
+    from conftest import OUTBOX
+
+    import app.api.auth as auth_api
+
+    monkeypatch.setattr(auth_api, "CODE_RESEND", timedelta(0))  # the pause after the code above is not tested here
+    sent = len(OUTBOX)
+    assert (await client.post("/api/auth/register/code", json={"email": "code@example.com"})).status_code == 200
+    assert len(OUTBOX) == sent + 1 and "уже есть" in OUTBOX[-1][2] and not re.search(r"\b\d{6}\b", OUTBOX[-1][2])
+    r = await client.post("/api/auth/register", json={**body, "code": "123456"})
+    assert r.status_code == 400
 
 
 async def test_code_attempts_run_out(client, monkeypatch):
@@ -288,3 +299,43 @@ async def test_password_change_keeps_this_session(client):
     assert (await client.post("/api/auth/refresh", json={"refresh_token": after})).status_code == 200
     # the other device is signed out
     assert (await client.post("/api/auth/refresh", json={"refresh_token": other["refresh_token"]})).status_code == 401
+
+
+async def test_wrong_codes_of_a_day_are_limited(client, monkeypatch):
+    """Five tries per code and new codes each minute would let a guesser go on for ever: the wrong codes of an
+    address are capped per day over all its codes."""
+    import app.api.auth as auth_api
+
+    monkeypatch.setattr(auth_api, "CODE_RESEND", timedelta(0))
+    monkeypatch.setattr(auth_api, "CODES_PER_HOUR", 100)
+    await register(client, "guess@example.com")
+    client.cookies.clear()
+    for _ in range(auth_api.FAILS_PER_DAY // auth_api.CODE_ATTEMPTS):
+        assert (await client.post("/api/auth/password/code", json={"email": "guess@example.com"})).status_code == 200
+        for _ in range(auth_api.CODE_ATTEMPTS):
+            await client.post("/api/auth/password/check", json={"email": "guess@example.com", "code": "000000"})
+    assert (await client.post("/api/auth/password/code", json={"email": "guess@example.com"})).status_code == 200
+    r = await client.post("/api/auth/password/check", json={"email": "guess@example.com", "code": "000000"})
+    assert r.status_code == 429 and "завтра" in r.json()["detail"]
+
+
+async def test_codes_per_day_are_limited(client, monkeypatch):
+    import app.api.auth as auth_api
+
+    monkeypatch.setattr(auth_api, "CODE_RESEND", timedelta(0))
+    monkeypatch.setattr(auth_api, "CODES_PER_HOUR", 100)
+    for _ in range(auth_api.CODES_PER_DAY):
+        assert (await client.post("/api/auth/password/code", json={"email": "flood@example.com"})).status_code == 200
+        auth_api._failures.clear()  # the per-address limit of the client is not what is tested here
+    r = await client.post("/api/auth/password/code", json={"email": "flood@example.com"})
+    assert r.status_code == 429 and "завтра" in r.json()["detail"]
+
+
+async def test_no_codes_into_the_log_on_a_server(monkeypatch):
+    import app.mail as mail
+    from app.config import Settings
+
+    settings = Settings(APP_ENV="prod", JWT_SECRET="x" * 40, SMTP_HOST="")
+    monkeypatch.setattr(mail, "get_settings", lambda: settings)
+    with pytest.raises(mail.MailError):
+        await mail.send_mail("someone@example.com", "Код подтверждения: 123456", "123456")
