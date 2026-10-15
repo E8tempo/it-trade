@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 type Props = {
   image: ProductImageT | null;
   alt: string;
-  /** `sizes` attribute for the srcset (sm 160 / md 480 / lg 1000 px) */
+  /** `sizes` attribute for the srcset (md 480 / lg 1000 px); small slots (cart, search) get md */
   sizes: string;
   priority?: boolean;
   className?: string;
@@ -36,7 +36,7 @@ export function ProductImage({ image, alt, sizes, priority, className }: Props) 
     );
   }
 
-  const { sm, md, lg } = image.urls;
+  const { md, lg } = image.urls;
   return (
     <div className="relative size-full">
       {status === "loading" && <div className="absolute inset-0 animate-pulse rounded-xl bg-foreground/[0.04]" aria-hidden />}
@@ -47,7 +47,7 @@ export function ProductImage({ image, alt, sizes, priority, className }: Props) 
           if (el && status === "initial") setStatus(!el.complete ? "loading" : el.naturalWidth > 0 ? "loaded" : "error");
         }}
         src={md}
-        srcSet={`${sm} 160w, ${md} 480w, ${lg} 1000w`}
+        srcSet={`${md} 480w, ${lg} 1000w`}
         sizes={sizes}
         alt={alt}
         loading={priority ? "eager" : "lazy"}

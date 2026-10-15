@@ -1,6 +1,6 @@
 // Shapes of the FastAPI catalog API (backend/app/api/schemas.py).
 
-export type ImageUrls = { lg: string; md: string; sm: string };
+export type ImageUrls = { lg: string; md: string };
 
 export type ProductImage = {
   id: number;
