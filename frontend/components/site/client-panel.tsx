@@ -40,7 +40,7 @@ export const CLIENT_NAV: ClientNavItem[] = [
   { label: "Каталог", icon: LayoutGrid, href: "/catalog", match: /^\/(catalog|c|p|search)(\/|$)/ },
   { label: "Корзина", icon: ShoppingCart, href: "/cart", match: /^\/(cart|checkout)(\/|$)/, clientOnly: true },
   { label: "Заказы", icon: Package, href: "/account/orders", clientOnly: true },
-  { label: "КП для клиентов", icon: FileText },
+  { label: "КП для клиентов", icon: FileText, href: "/account/quotes", clientOnly: true },
   { label: "Взаиморасчёты", icon: Wallet },
   { label: "Организации", icon: Building2, href: "/account/organizations" },
   { label: "Профиль", icon: UserRound, href: "/account", match: /^\/account$/ },

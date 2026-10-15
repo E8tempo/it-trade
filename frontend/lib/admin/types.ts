@@ -145,6 +145,8 @@ export type PriceImpact = {
   avg_markup_before: number;
   avg_markup_after: number;
   examples: { sku: number; name: string; supplier_price: number; before: number | null; after: number }[];
+  by_rrp: number; // of `products`: priced at the supplier's RRP rather than by the markup
+  fixed: number; // left out: the price is fixed by hand
   above_retail: number | null; // wholesale types: products whose new price is above the retail price of the same payment
 };
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { Building2, Package, UserRound, type LucideIcon } from "lucide-react";
+import { Building2, FileText, Package, UserRound, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
@@ -10,9 +10,10 @@ import { useSession } from "@/components/shop/session-provider";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
-// The account's sections. Later stages add more of them here (commercial offers, invoices).
+// The account's sections. Later stages add more of them here (settlements).
 const TABS: { href: string; label: string; icon: LucideIcon; exact?: boolean }[] = [
   { href: "/account/orders", label: "Заказы", icon: Package },
+  { href: "/account/quotes", label: "КП", icon: FileText },
   { href: "/account/organizations", label: "Организации", icon: Building2 },
   { href: "/account", label: "Профиль", icon: UserRound, exact: true },
 ];

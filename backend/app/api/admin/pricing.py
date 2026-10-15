@@ -62,6 +62,8 @@ class ImpactOut(BaseModel):
     avg_markup_before: float  # %, mean of price / supplier price - 1
     avg_markup_after: float
     examples: list[PriceChange]  # the largest changes
+    by_rrp: int  # of `products`: priced at the supplier's RRP rather than by the markup
+    fixed: int  # left out: the price of the type is fixed by admin
     # wholesale types: products whose new price is above their current retail price of the same payment method
     above_retail: int | None
 
@@ -129,12 +131,15 @@ async def impact(body: ImpactIn, session: Session):
         )
     ).all()
     changes, before_m, after_m = [], [], []
-    products = up = down = above = 0
+    products = up = down = above = by_rrp = fixed = 0
     for sku, name, sp, rrp, price, retail_price, overrides, path in rows:
         if overrides and t in overrides:
-            continue  # the price of this type is fixed by admin
+            fixed += 1  # the price of this type is fixed by admin
+            continue
         products += 1
-        new = price_breakdown(sp, rrp, path, body.settings).price
+        b = price_breakdown(sp, rrp, path, body.settings)
+        new = b.price
+        by_rrp += b.rrp_used
         if price is not None:
             before_m.append(float(price / sp - 1))
         after_m.append(float(new / sp - 1))
@@ -152,6 +157,8 @@ async def impact(body: ImpactIn, session: Session):
         avg_markup_before=round(100 * sum(before_m) / len(before_m), 1) if before_m else 0.0,
         avg_markup_after=round(100 * sum(after_m) / len(after_m), 1) if after_m else 0.0,
         examples=changes[:10],
+        by_rrp=by_rrp,
+        fixed=fixed,
         above_retail=above if t.audience == Audience.wholesale else None,
     )
 

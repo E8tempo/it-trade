@@ -64,6 +64,7 @@ async def test_pricing_preview_and_impact(admin):
     r = await admin.post("/api/admin/pricing/impact", json={"settings": {**rules, "markup_percent": 25, "category_markups": {}, "min_markup": 0}})
     d = r.json()
     assert (d["products"], d["changed"], d["up"], d["down"]) == (2, 2, 2, 0)
+    assert (d["by_rrp"], d["fixed"]) == (0, 0)  # use_rrp is off in these rules; nothing fixed by hand
     assert (d["avg_markup_before"], d["avg_markup_after"]) == (20.0, 25.0)
     assert d["examples"][0] == {"sku": 10, "name": "Ноутбук Lenovo V15", "supplier_price": 50000, "before": 60000, "after": 62500}
     assert d["above_retail"] is None  # only counted for the wholesale types

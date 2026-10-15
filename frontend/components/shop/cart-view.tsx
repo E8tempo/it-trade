@@ -1,10 +1,11 @@
 "use client";
 
-import { ArrowLeft, Building2, CircleAlert, Clock, LoaderCircle, LockKeyhole, ShoppingCart, Trash2, X } from "lucide-react";
+import { ArrowLeft, Building2, CircleAlert, Clock, FileText, LoaderCircle, LockKeyhole, ShoppingCart, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
+import { useNewQuote } from "@/components/account/quotes/quotes-list";
 import { ProductImage } from "@/components/catalog/product-image";
 import { PaymentChoice } from "@/components/shop/choice-card";
 import { errorMessage } from "@/components/shop/errors";
@@ -45,6 +46,7 @@ export function CartView() {
   const [clearing, setClearing] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const { totals, units, items } = useCartTotals(cart);
+  const newQuote = useNewQuote();
 
   if (access === "guest" || access === "pending") return <NoCart access={access} />;
   if (loading) return <CartSkeleton />;
@@ -116,10 +118,22 @@ export function CartView() {
     <CartShell
       count={items.length}
       action={
-        <Button variant="ghost" className="h-9 gap-1.5 rounded-xl px-3 text-muted-foreground" onClick={onClear} disabled={clearing}>
-          {clearing ? <LoaderCircle className="animate-spin" /> : <X />}
-          Очистить корзину
-        </Button>
+        <div className="flex flex-wrap gap-1">
+          <Button
+            variant="ghost"
+            className="h-9 gap-1.5 rounded-xl px-3 text-muted-foreground"
+            onClick={() => newQuote.create(true)}
+            disabled={newQuote.busy !== null || syncing}
+            title="Коммерческое предложение вашему заказчику: эти товары с вашей наценкой"
+          >
+            {newQuote.busy ? <LoaderCircle className="animate-spin" /> : <FileText />}
+            Сделать КП
+          </Button>
+          <Button variant="ghost" className="h-9 gap-1.5 rounded-xl px-3 text-muted-foreground" onClick={onClear} disabled={clearing}>
+            {clearing ? <LoaderCircle className="animate-spin" /> : <X />}
+            Очистить корзину
+          </Button>
+        </div>
       }
     >
       <div className="grid grid-cols-1 gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_24rem]">
