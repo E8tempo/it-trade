@@ -9,17 +9,31 @@ export class ApiError extends Error {
   }
 }
 
-let refreshing: Promise<boolean> | null = null;
+let refreshing: Promise<unknown> | null = null;
 
-/** One refresh at a time: parallel 401s wait for the same request. */
-function refreshSession(): Promise<boolean> {
+/**
+ * Refreshes the session: the new tokens, or null when it is over (401); rejects when the API is unreachable.
+ * One refresh at a time for the whole page: the 401 retries below and the session provider's refresh ahead of
+ * the token's expiry wait for the same request, so two refreshes never race with the same cookie.
+ */
+export function refreshTokens<T>(): Promise<T | null> {
   refreshing ??= fetch("/api/auth/refresh", { method: "POST" })
-    .then((r) => r.ok)
-    .catch(() => false)
+    .then(async (r) => {
+      if (r.ok) return r.json();
+      if (r.status === 401) return null;
+      throw new ApiError(r.status, await r.json().catch(() => null));
+    })
     .finally(() => {
       refreshing = null;
     });
-  return refreshing;
+  return refreshing as Promise<T | null>;
+}
+
+function refreshSession(): Promise<boolean> {
+  return refreshTokens().then(
+    (t) => t !== null,
+    () => false,
+  );
 }
 
 /**

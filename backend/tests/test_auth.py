@@ -264,3 +264,27 @@ async def test_password_reset_with_a_code(client):
     assert (await client.post("/api/auth/login", json={"email": "forgot@example.com", "password": "old-pass-123"})).status_code == 401
     assert (await client.post("/api/auth/login", json={"email": "forgot@example.com", "password": "new-pass-456"})).status_code == 200
     assert (await client.post("/api/auth/refresh", json={"refresh_token": old_session["refresh_token"]})).status_code == 401
+
+
+async def test_password_change_keeps_this_session(client):
+    from conftest import OUTBOX
+
+    mine = await register(client, "keep@example.com")  # this browser
+    other = (await client.post("/api/auth/login", json={"email": "keep@example.com", "password": "secret-123"})).json()  # another device
+    client.cookies.clear()
+    before = mine["refresh_token"]
+    assert (await client.post("/api/auth/password/code", json={"email": "keep@example.com"})).status_code == 200
+    code = re.search(r"\b(\d{6})\b", OUTBOX[-1][2]).group(1)
+    r = await client.post(
+        "/api/auth/password",
+        json={"code": code, "new_password": "secret-456"},
+        headers={"Authorization": f"Bearer {mine['access_token']}", "Cookie": f"refresh_token={before}"},
+    )
+    assert r.status_code == 200
+    after = r.json()["refresh_token"]
+    client.cookies.clear()
+    # a request of this page that still carried the old cookie: within the grace period, not a stolen token
+    assert (await client.post("/api/auth/refresh", json={"refresh_token": before})).status_code == 200
+    assert (await client.post("/api/auth/refresh", json={"refresh_token": after})).status_code == 200
+    # the other device is signed out
+    assert (await client.post("/api/auth/refresh", json={"refresh_token": other["refresh_token"]})).status_code == 401

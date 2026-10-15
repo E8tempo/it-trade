@@ -31,6 +31,7 @@ from app.auth import (
     hash_password,
     issue_tokens,
     normalize_email,
+    refresh_family,
     revoke_all,
     revoke_refresh_token,
     rotate_refresh_token,
@@ -394,10 +395,21 @@ async def update_me(body: ProfileIn, user: CurrentUser, session: Session):
 
 @router.post("/password", response_model=TokenOut)
 async def change_password(body: PasswordIn, user: CurrentUser, request: Request, response: Response, session: Session):
-    """Changes the password and ends all other sessions; this one gets new tokens."""
+    """Changes the password and ends all other sessions. This one goes on: its refresh token is rotated as on
+    a refresh (the replaced one keeps its grace period), so a request of this browser that still carries the old
+    cookie is not taken for a stolen token and does not sign it out."""
     await _use_code(session, user.email, RESET, body.code)
     user.password_hash = hash_password(body.new_password)
-    await revoke_all(session, user.id)
-    pair = await issue_tokens(session, user, user_agent=request.headers.get("user-agent"))
+    token = request.cookies.get(REFRESH_COOKIE)
+    family = refresh_family(token, user.id)
+    await revoke_all(session, user.id, except_family=family)
+    if family:
+        try:
+            _, pair = await rotate_refresh_token(session, token, request.headers.get("user-agent"))
+        except AuthError:
+            family = None
+    if not family:  # a bearer-token client, or its session was over: a new one
+        await revoke_all(session, user.id)
+        pair = await issue_tokens(session, user, user_agent=request.headers.get("user-agent"))
     await session.commit()
     return _respond(response, user, pair)

@@ -28,7 +28,9 @@ from app.models.base import utcnow
 log = logging.getLogger(__name__)
 ALGORITHM = "HS256"
 ISSUER = "it-trade"
-REUSE_GRACE = timedelta(seconds=30)
+# A replaced refresh token is still accepted this long (requests of one page sent before the cookie changed, two
+# refreshes at once): only after it is its use taken for a stolen token. 30 s logged a client out in practice.
+REUSE_GRACE = timedelta(minutes=2)
 _hasher = PasswordHasher()
 _DUMMY_HASH = _hasher.hash("timing-equaliser")
 
@@ -138,8 +140,22 @@ async def revoke_family(session: AsyncSession, family: str) -> None:
     await session.execute(update(RefreshToken).where(RefreshToken.family == family).values(replaced_by=None))
 
 
-async def revoke_all(session: AsyncSession, user_id: int) -> None:
-    await session.execute(update(RefreshToken).where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None)).values(revoked_at=utcnow()))
+async def revoke_all(session: AsyncSession, user_id: int, except_family: str | None = None) -> None:
+    stmt = update(RefreshToken).where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
+    if except_family:
+        stmt = stmt.where(RefreshToken.family != except_family)
+    await session.execute(stmt.values(revoked_at=utcnow()))
+
+
+def refresh_family(token: str | None, user_id: int) -> str | None:
+    """The session (token family) a refresh token belongs to, if it is a valid one of this user."""
+    if not token:
+        return None
+    try:
+        claims = decode_token(token, "refresh")
+    except AuthError:
+        return None
+    return claims.get("fam") if claims.get("sub") == str(user_id) else None
 
 
 # --- bootstrap ------------------------------------------------------------------------------

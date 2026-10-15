@@ -18,7 +18,7 @@ const EMAIL = 0;
 const CODE = 1;
 const PASSWORD = 2;
 
-type Errors = { email?: string; code?: string; password?: string };
+type Errors = { email?: string; code?: string; password?: string; repeat?: string };
 
 /**
  * A new password with a code sent to the e-mail, in steps like the registration's.
@@ -119,10 +119,15 @@ function ResetForm({ initialEmail, account, onDone }: { initialEmail: string; ac
   }
 
   async function savePassword(form: HTMLFormElement) {
-    const password = String(new FormData(form).get("new-password") ?? "");
-    const bad = password.length < PASSWORD_MIN ? `Пароль должен быть не короче ${PASSWORD_MIN} символов` : password.length > 128 ? "Слишком длинный пароль" : undefined;
-    setErrors({ password: bad });
-    if (bad || !sent) return;
+    const data = new FormData(form);
+    const password = String(data.get("new-password") ?? "");
+    const found: Errors = {
+      password:
+        password.length < PASSWORD_MIN ? `Пароль должен быть не короче ${PASSWORD_MIN} символов` : password.length > 128 ? "Слишком длинный пароль" : undefined,
+    };
+    found.repeat = !found.password && String(data.get("repeat-password") ?? "") !== password ? "Пароли не совпадают" : undefined;
+    setErrors(found);
+    if (found.password || found.repeat || !sent) return;
     setPending(true);
     setError(null);
     try {
@@ -218,6 +223,9 @@ function ResetForm({ initialEmail, account, onDone }: { initialEmail: string; ac
           <input type="hidden" name="username" autoComplete="username" value={sent?.email ?? ""} readOnly />
           <Field id="reset-password" label="Новый пароль" error={errors.password} hint={`Не короче ${PASSWORD_MIN} символов`}>
             <PasswordInput name="new-password" autoComplete="new-password" {...describedBy("reset-password", errors.password, true)} />
+          </Field>
+          <Field id="reset-repeat" label="Повторите пароль" error={errors.repeat}>
+            <PasswordInput name="repeat-password" autoComplete="new-password" {...describedBy("reset-repeat", errors.repeat)} />
           </Field>
         </>
       )}

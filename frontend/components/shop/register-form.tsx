@@ -40,8 +40,8 @@ const STATUS: Record<string, string> = {
 type Org = { name: string; kpp: string; ogrn: string; address: string };
 const NO_ORG: Org = { name: "", kpp: "", ogrn: "", address: "" };
 
-type RegisterField = "inn" | "org" | "kpp" | "name" | "phone" | "email" | "password" | "code";
-const STEP_FIELDS: RegisterField[][] = [["inn"], ["org", "kpp"], ["name", "phone"], ["email", "password"], ["code"]];
+type RegisterField = "inn" | "org" | "kpp" | "name" | "phone" | "email" | "password" | "repeat" | "code";
+const STEP_FIELDS: RegisterField[][] = [["inn"], ["org", "kpp"], ["name", "phone"], ["email", "password", "repeat"], ["code"]];
 const CODE_STEP = 4;
 // under each step's heading (the code step names the address instead)
 const LEADS = [
@@ -114,6 +114,7 @@ export function RegisterForm() {
       email: emailError(text(data, "email").trim(), true),
       password:
         password.length < PASSWORD_MIN ? `Пароль должен быть не короче ${PASSWORD_MIN} символов` : password.length > 128 ? "Слишком длинный пароль" : undefined,
+      repeat: password.length >= PASSWORD_MIN && text(data, "repeat") !== password ? "Пароли не совпадают" : undefined,
       code: /^\d{6}$/.test(code) ? undefined : "Введите 6 цифр из письма",
     };
   }
@@ -376,6 +377,9 @@ export function RegisterForm() {
         </Field>
         <Field id="reg-password" label="Пароль" error={errors.password} hint={`Не короче ${PASSWORD_MIN} символов`}>
           <PasswordInput name="password" autoComplete="new-password" required {...describedBy("reg-password", errors.password, true)} />
+        </Field>
+        <Field id="reg-repeat" label="Повторите пароль" error={errors.repeat}>
+          <PasswordInput name="repeat" autoComplete="new-password" required {...describedBy("reg-repeat", errors.repeat)} />
         </Field>
       </fieldset>
 

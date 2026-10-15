@@ -14,7 +14,7 @@ import {
 import { toast } from "sonner";
 
 import { errorMessage } from "@/components/shop/errors";
-import { api, ApiError } from "@/lib/api/client";
+import { api, ApiError, refreshTokens } from "@/lib/api/client";
 import type { AuthTokens, Cart, CartItem, Organization, OrganizationInput, PaymentMethod, User } from "@/lib/types";
 
 // The visitor's session, organizations and cart, shared by the header, the side panel, product
@@ -182,20 +182,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // token's expiry is unknown (after a page load) or near; the refresh tells the new expiry.
   const keepSession = useCallback((): Promise<boolean> => {
     if (!userRef.current || Date.now() < tokenUntil.current) return Promise.resolve(true);
-    refreshing.current ??= api<AuthTokens>("/api/auth/refresh", { method: "POST" })
+    // the page's one refresh (lib/api/client.ts): shared with the 401 retries of other requests
+    refreshing.current ??= refreshTokens<AuthTokens>()
       .then(
         (t) => {
-          signedIn(t);
-          return true;
-        },
-        (e: unknown) => {
-          if (!(e instanceof ApiError && e.status === 401)) return true; // no connection: the request will tell
+          if (t) {
+            signedIn(t);
+            return true;
+          }
           // signed out elsewhere (another device, a password change): from now on a guest
           tokenUntil.current = 0;
           setUser(null);
           toast.info("Сеанс завершён. Войдите снова, чтобы вернуться к своей корзине и заказам.");
           return false;
         },
+        () => true, // no connection: the request will tell
       )
       .finally(() => {
         refreshing.current = null;
