@@ -18,10 +18,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
-  ],
+  themeColor: "#ffffff",
 };
 
 // Before the first paint: was the visitor signed in last time? (components/shop/session-provider.tsx:
@@ -36,8 +33,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <script dangerouslySetInnerHTML={{ __html: AUTH_HINT }} />
       </head>
       <body className="flex min-h-full flex-col">
-        {/* light, dark or the device's (components/site/theme-toggle.tsx): a class on <html>, set before the first paint */}
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+        {/* light until the visitor picks dark or the device's (components/site/theme-toggle.tsx): a class on <html>,
+            set before the first paint */}
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
           <TooltipProvider>{children}</TooltipProvider>
         </ThemeProvider>
       </body>
