@@ -1,15 +1,37 @@
 "use client";
 
-import { LoaderCircle, TriangleAlert, Undo2 } from "lucide-react";
+import {
+  ArrowUpToLine,
+  Calculator,
+  ChartNoAxesColumn,
+  Coins,
+  Copy,
+  Ellipsis,
+  FolderTree,
+  LoaderCircle,
+  Percent,
+  SlidersHorizontal,
+  Tag,
+  TriangleAlert,
+  Undo2,
+  type LucideIcon,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 
-import { Field } from "@/components/admin/orders/order-fields";
-import { CategoryMarkups } from "@/components/admin/pricing/category-markups";
+import { CategoryMarkupChips, CategoryMarkups } from "@/components/admin/pricing/category-markups";
 import { PriceCalculator } from "@/components/admin/pricing/price-calculator";
-import { Panel } from "@/components/admin/ui";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -54,6 +76,9 @@ export const roundingLabel = (step: number) => (step === 1 ? "до рубля" :
 
 const ROUNDING_STEPS = [1, 10, 50, 100];
 
+const DIALOG = "max-h-[calc(100dvh-2rem)] gap-5 overflow-y-auto p-5 sm:max-w-xl sm:p-6";
+const DIALOG_FOOT = "-mx-5 -mb-5 rounded-b-xl px-5 sm:-mx-6 sm:-mb-6 sm:px-6";
+
 const HINT: Record<PriceType, string> = {
   retail_cash: "Розничная цена за наличные. Сайт работает только с бизнесом, поэтому клиентам она не видна: она для справки и заказов из админки, по ней сортируется каталог «по цене».",
   retail_cashless: "Розничная цена по безналу. Клиентам на сайте не видна: она для справки и заказов из админки.",
@@ -83,6 +108,7 @@ export function PricingEditor({
   const router = useRouter();
   const [impact, setImpact] = useState<{ draft: string; data: PriceImpact } | null>(null);
   const [busy, setBusy] = useState<"impact" | "save" | null>(null);
+  const [dialog, setDialogState] = useState<"impact" | "calculator" | "categories" | null>(null);
   const [refreshing, startRefresh] = useTransition();
   const { label, audience, payment } = PRICE_TYPE[type];
   const saved = toDraft(pricing[type]);
@@ -94,6 +120,13 @@ export function PricingEditor({
   const set = (patch: Partial<Draft>) => onChange({ ...draft, ...patch });
   const steps = [...new Set([...ROUNDING_STEPS, draft.round_to])].sort((a, b) => a - b);
   const rounding = Object.fromEntries(steps.map((s) => [String(s), roundingLabel(s)]));
+  const ownCategories = Object.keys(draft.category_markups).length;
+
+  function setDialog(d: typeof dialog) {
+    setDialogState(d);
+    // the forecast is counted when its dialog opens, unless it is already there for these rules
+    if (d === "impact" && !shown && !invalid) void checkImpact();
+  }
 
   function copyFrom(from: PriceType) {
     const rules = toDraft(pricing[from]);
@@ -137,182 +170,98 @@ export function PricingEditor({
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <p className="max-w-3xl text-sm text-muted-foreground">{HINT[type]}</p>
-        <Select value={null} onValueChange={(v) => v && copyFrom(v as PriceType)}>
-          <SelectTrigger className="h-9 w-full shrink-0 bg-background md:w-64" aria-label="Скопировать сохранённые правила другой цены">
-            <SelectValue placeholder="Скопировать правила из…" />
-          </SelectTrigger>
-          <SelectContent>
-            {PRICE_TYPES.filter((t) => t.value !== type).map((t) => (
-              <SelectItem key={t.value} value={t.value}>
-                {t.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+    <section className="overflow-hidden rounded-2xl bg-background ring-1 ring-foreground/10">
+      <header className="flex flex-col gap-3 border-b px-5 py-4 sm:px-6 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <h2 className="font-semibold">Правила «{label}»</h2>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{HINT[type]}</p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <Button variant="outline" onClick={() => setDialog("impact")} disabled={invalid}>
+            <ChartNoAxesColumn />
+            Как изменятся цены
+          </Button>
+          <Button variant="outline" onClick={() => setDialog("calculator")}>
+            <Calculator />
+            Калькулятор
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="outline" size="icon" aria-label="Ещё" />}>
+              <Ellipsis />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72 rounded-xl p-1.5">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>Скопировать сохранённые правила</DropdownMenuLabel>
+                {PRICE_TYPES.filter((t) => t.value !== type).map((t) => (
+                  <DropdownMenuItem key={t.value} onClick={() => copyFrom(t.value)} className="gap-2.5 rounded-lg px-2.5 py-2">
+                    <Copy />
+                    {t.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </header>
+
+      <div className="px-5 sm:px-6">
+        <RuleRow icon={Percent} label="Наценка по умолчанию" hint="К закупке, если у категории товара нет своей наценки">
+          <NumberInput
+            value={draft.markup_percent}
+            onChange={(v) => set({ markup_percent: v })}
+            unit="%"
+            step="0.1"
+            label="Наценка по умолчанию, %"
+          />
+        </RuleRow>
+        <RuleRow icon={Coins} label="Минимальная наценка" hint="Наценка в рублях не опускается ниже этой суммы">
+          <NumberInput value={draft.min_markup} onChange={(v) => set({ min_markup: v })} unit="₽" label="Минимальная наценка, ₽" />
+        </RuleRow>
+        <RuleRow icon={ArrowUpToLine} label="Округление вверх" hint="Цена округляется вверх до этого шага">
+          <Select items={rounding} value={String(draft.round_to)} onValueChange={(v) => v && set({ round_to: Number(v) })}>
+            <SelectTrigger className="h-9 w-full sm:w-40" aria-label="Округление цены вверх">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(rounding).map(([k, text]) => (
+                <SelectItem key={k} value={k}>
+                  {text}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </RuleRow>
+        <RuleRow
+          icon={Tag}
+          label="РРЦ поставщика"
+          hint="Рекомендованная цена заменяет расчёт по наценке, если она не ниже закупки + минимальной наценки"
+        >
+          <label className="flex h-9 items-center gap-2.5 text-sm sm:w-40">
+            <Switch checked={draft.use_rrp} onCheckedChange={(v) => set({ use_rrp: v })} />
+            {draft.use_rrp ? "ставится" : "не ставится"}
+          </label>
+        </RuleRow>
+        <RuleRow
+          icon={FolderTree}
+          label="Наценки по категориям"
+          hint={
+            ownCategories
+              ? "Действуют на подкатегории, пока у тех нет своей"
+              : "Своих нет: везде действует наценка по умолчанию"
+          }
+          below={<CategoryMarkupChips categories={categories} value={draft.category_markups} onChange={(category_markups) => set({ category_markups })} />}
+        >
+          <Button variant="outline" className="w-full sm:w-40" onClick={() => setDialog("categories")}>
+            <SlidersHorizontal />
+            Настроить
+          </Button>
+        </RuleRow>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <div className="space-y-6">
-          <Panel title="Общие правила">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <Field label="Наценка по умолчанию, %">
-                <Input
-                  type="number"
-                  min={0}
-                  step="0.1"
-                  value={shownNumber(draft.markup_percent)}
-                  onChange={(e) => set({ markup_percent: parse(e.target.value) })}
-                  aria-invalid={!(draft.markup_percent >= 0) || undefined}
-                  className="h-9"
-                />
-              </Field>
-              <Field label="Минимальная наценка, ₽">
-                <Input
-                  type="number"
-                  min={0}
-                  value={shownNumber(draft.min_markup)}
-                  onChange={(e) => set({ min_markup: parse(e.target.value) })}
-                  aria-invalid={!(draft.min_markup >= 0) || undefined}
-                  className="h-9"
-                />
-              </Field>
-              <Field label="Округление цены вверх">
-                <Select items={rounding} value={String(draft.round_to)} onValueChange={(v) => v && set({ round_to: Number(v) })}>
-                  <SelectTrigger className="h-9 w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(rounding).map(([k, text]) => (
-                      <SelectItem key={k} value={k}>
-                        {text}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            </div>
-            <label className="mt-5 flex items-start gap-3">
-              <Switch checked={draft.use_rrp} onCheckedChange={(v) => set({ use_rrp: v })} className="mt-0.5" />
-              <span className="text-sm">
-                <span className="font-medium">Ставить РРЦ поставщика, если она есть</span>
-                <span className="block text-muted-foreground">
-                  Рекомендованная розничная цена заменяет расчёт по наценке, если она не ниже закупки + минимальной наценки.
-                </span>
-              </span>
-            </label>
-          </Panel>
-
-          <Panel title="Наценки по категориям">
-            <p className="mb-4 text-sm text-muted-foreground">
-              Своя наценка категории действует на все её подкатегории, пока у подкатегории нет своей. Пустое поле — наследовать (серым
-              показано значение, которое действует сейчас).
-            </p>
-            <CategoryMarkups
-              categories={categories}
-              value={draft.category_markups}
-              onChange={(category_markups) => set({ category_markups })}
-              fallback={draft.markup_percent}
-            />
-          </Panel>
-        </div>
-
-        <div className="space-y-6">
-          <Panel title="Как изменятся цены">
-            <p className="text-sm text-muted-foreground">
-              Прогноз для цены «{label}» по правилам этой вкладки, в том числе несохранённым: сколько товаров подорожает и подешевеет.
-              Товары, у которых эта цена зафиксирована вручную, правила не затрагивают.
-            </p>
-            <Button variant="outline" className="mt-4" onClick={checkImpact} disabled={busy !== null || invalid}>
-              {busy === "impact" && <LoaderCircle className="animate-spin" />}
-              {shown ? "Посчитать заново" : "Посчитать"}
-            </Button>
-            {shown && (
-              <div className="mt-5 space-y-3 text-sm">
-                <div className="grid grid-cols-3 gap-2">
-                  <Mini label="Изменятся" value={`${formatNumber(shown.changed)} из ${formatNumber(shown.products)}`} />
-                  <Mini label="Подорожают" value={formatNumber(shown.up)} />
-                  <Mini label="Подешевеют" value={formatNumber(shown.down)} />
-                </div>
-                <p>
-                  Средняя наценка: {shown.avg_markup_before}% → <b>{shown.avg_markup_after}%</b>
-                </p>
-                {audience === "wholesale" && shown.above_retail != null && shown.above_retail > 0 && (
-                  <div className="flex gap-2.5 rounded-xl bg-amber-500/10 px-3 py-2.5 text-amber-900 ring-1 ring-amber-500/25">
-                    <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-                    <p>
-                      У {formatNumber(shown.above_retail)} {pluralize(shown.above_retail, ["товара", "товаров", "товаров"])} оптовая цена
-                      выше розничной
-                      <span className="block text-xs opacity-80">
-                        По этим правилам, в сравнении с нынешней ценой «{PRICE_TYPE[priceType("retail", payment)].label}».
-                      </span>
-                    </p>
-                  </div>
-                )}
-                {shown.examples.length > 0 && (
-                  <ul className="divide-y rounded-xl ring-1 ring-foreground/10">
-                    {shown.examples.map((e) => (
-                      <li key={e.sku} className="flex items-center justify-between gap-3 px-3 py-2">
-                        <span className="line-clamp-1 min-w-0">{e.name}</span>
-                        <span className="shrink-0 whitespace-nowrap tabular-nums">
-                          <span className="text-muted-foreground">{money(e.before)}</span> → <b>{money(e.after)}</b>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-          </Panel>
-
-          <Panel title="Калькулятор цены">
-            <p className="mb-4 text-sm text-muted-foreground">
-              Считает по правилам этой вкладки, даже если они ещё не сохранены. Остальные три цены — по сохранённым правилам.
-            </p>
-            <PriceCalculator categories={categories} supplier={supplier} priceType={type} settings={draft} disabled={invalid} />
-          </Panel>
-        </div>
-      </div>
-
-      <SaveBar
-        label={label}
-        dirty={dirty}
-        invalid={invalid}
-        busy={busy !== null || refreshing}
-        onSave={() => void save()}
-        onRevert={() => onChange(saved)}
-      />
-    </div>
-  );
-}
-
-/**
- * Saving the rules of this tab: pinned to the bottom of the screen while the tab is in view, so it is always clear
- * which rules the button saves and whether they have unsaved changes.
- */
-function SaveBar({
-  label,
-  dirty,
-  invalid,
-  busy,
-  onSave,
-  onRevert,
-}: {
-  label: string;
-  dirty: boolean;
-  invalid: boolean;
-  busy: boolean;
-  onSave: () => void;
-  onRevert: () => void;
-}) {
-  return (
-    <div className="sticky bottom-4 z-20 mt-6">
-      <div
+      <footer
         className={cn(
-          "flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl px-4 py-3 shadow-lg ring-1 backdrop-blur",
-          dirty ? "bg-amber-50/95 ring-amber-500/30" : "bg-background/95 ring-foreground/10",
+          "flex flex-wrap items-center gap-x-4 gap-y-2 border-t px-5 py-3 sm:px-6",
+          invalid ? "bg-destructive/5" : dirty ? "bg-amber-50" : "bg-muted/30",
         )}
         role="status"
       >
@@ -322,25 +271,180 @@ function SaveBar({
           ) : dirty ? (
             <>
               <span className="mr-2 inline-block size-2 rounded-full bg-amber-500 align-middle" aria-hidden />
-              Правила «{label}» изменены и ещё не сохранены
+              Изменения ещё не сохранены
             </>
           ) : (
-            <span className="text-muted-foreground">Правила «{label}» сохранены</span>
+            <span className="text-muted-foreground">Сохранено. Цены пересчитываются сразу после сохранения</span>
           )}
         </p>
-        <div className="flex gap-2">
-          {dirty && (
-            <Button variant="ghost" onClick={onRevert} disabled={busy}>
+        {dirty && (
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={() => onChange(saved)} disabled={busy !== null || refreshing}>
               <Undo2 />
               Отменить
             </Button>
+            <Button onClick={() => void save()} disabled={busy !== null || refreshing || invalid}>
+              {(busy === "save" || refreshing) && <LoaderCircle className="animate-spin" />}
+              Сохранить
+            </Button>
+          </div>
+        )}
+      </footer>
+
+      <Dialog open={dialog === "impact"} onOpenChange={(o) => setDialog(o ? "impact" : null)}>
+        <DialogContent className={DIALOG}>
+          <DialogHeader>
+            <DialogTitle className="text-lg font-semibold">Как изменятся цены «{label}»</DialogTitle>
+            <DialogDescription>
+              Прогноз по правилам этой вкладки{dirty ? ", в том числе несохранённым" : ""}. Товары, у которых эта цена зафиксирована
+              вручную, правила не затрагивают.
+            </DialogDescription>
+          </DialogHeader>
+          {shown ? (
+            <div className="space-y-3 text-sm">
+              <div className="grid grid-cols-3 gap-2">
+                <Mini label="Изменятся" value={`${formatNumber(shown.changed)} из ${formatNumber(shown.products)}`} />
+                <Mini label="Подорожают" value={formatNumber(shown.up)} />
+                <Mini label="Подешевеют" value={formatNumber(shown.down)} />
+              </div>
+              <p>
+                Средняя наценка: {shown.avg_markup_before}% → <b>{shown.avg_markup_after}%</b>
+              </p>
+              {audience === "wholesale" && shown.above_retail != null && shown.above_retail > 0 && (
+                <div className="flex gap-2.5 rounded-xl bg-amber-500/10 px-3 py-2.5 text-amber-900 ring-1 ring-amber-500/25">
+                  <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                  <p>
+                    У {formatNumber(shown.above_retail)} {pluralize(shown.above_retail, ["товара", "товаров", "товаров"])} оптовая цена выше
+                    розничной
+                    <span className="block text-xs opacity-80">
+                      По этим правилам, в сравнении с нынешней ценой «{PRICE_TYPE[priceType("retail", payment)].label}».
+                    </span>
+                  </p>
+                </div>
+              )}
+              {shown.examples.length > 0 && (
+                <ul className="max-h-72 divide-y overflow-y-auto rounded-xl ring-1 ring-foreground/10">
+                  {shown.examples.map((e) => (
+                    <li key={e.sku} className="flex items-center justify-between gap-3 px-3 py-2">
+                      <span className="line-clamp-1 min-w-0">{e.name}</span>
+                      <span className="shrink-0 whitespace-nowrap tabular-nums">
+                        <span className="text-muted-foreground">{money(e.before)}</span> → <b>{money(e.after)}</b>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : (
+            <div className="grid h-40 place-items-center text-sm text-muted-foreground">
+              {busy === "impact" ? <LoaderCircle className="size-5 animate-spin" /> : "Нет данных"}
+            </div>
           )}
-          <Button onClick={onSave} disabled={busy || !dirty || invalid}>
-            {busy && <LoaderCircle className="animate-spin" />}
-            Сохранить правила «{label}»
-          </Button>
+          <DialogFooter className={DIALOG_FOOT}>
+            <Button variant="outline" onClick={() => void checkImpact()} disabled={busy !== null || invalid}>
+              {busy === "impact" && <LoaderCircle className="animate-spin" />}
+              Посчитать заново
+            </Button>
+            <DialogClose render={<Button />}>Готово</DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={dialog === "calculator"} onOpenChange={(o) => setDialog(o ? "calculator" : null)}>
+        <DialogContent className={DIALOG}>
+          <DialogHeader>
+            <DialogTitle className="text-lg font-semibold">Калькулятор цены «{label}»</DialogTitle>
+            <DialogDescription>
+              Считает по правилам этой вкладки, даже если они ещё не сохранены. Остальные три цены — по сохранённым правилам.
+            </DialogDescription>
+          </DialogHeader>
+          <PriceCalculator categories={categories} supplier={supplier} priceType={type} settings={draft} disabled={invalid} />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={dialog === "categories"} onOpenChange={(o) => setDialog(o ? "categories" : null)}>
+        <DialogContent className={cn(DIALOG, "sm:max-w-2xl")}>
+          <DialogHeader>
+            <DialogTitle className="text-lg font-semibold">Наценки по категориям · {label}</DialogTitle>
+            <DialogDescription>
+              Своя наценка категории действует на все её подкатегории, пока у подкатегории нет своей. Пустое поле — наследовать (серым
+              показано значение, которое действует сейчас). Изменения попадают в правила вкладки, сохраняются кнопкой «Сохранить».
+            </DialogDescription>
+          </DialogHeader>
+          <CategoryMarkups
+            categories={categories}
+            value={draft.category_markups}
+            onChange={(category_markups) => set({ category_markups })}
+            fallback={draft.markup_percent}
+          />
+          <DialogFooter className={DIALOG_FOOT}>
+            <DialogClose render={<Button />}>Готово</DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </section>
+  );
+}
+
+/** A rule: an icon, what it is with a hint, and its control on the right (under it on a phone). */
+function RuleRow({
+  icon: Icon,
+  label,
+  hint,
+  below,
+  children,
+}: {
+  icon: LucideIcon;
+  label: string;
+  hint: string;
+  below?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="border-b py-4 last:border-0">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+        <div className="flex min-w-0 flex-1 items-center gap-4">
+          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-muted">
+            <Icon className="size-4 text-muted-foreground" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-medium">{label}</p>
+            <p className="text-sm text-muted-foreground">{hint}</p>
+          </div>
         </div>
+        <div className="shrink-0 sm:pl-0">{children}</div>
       </div>
+      {below && <div className="mt-3 sm:pl-13">{below}</div>}
+    </div>
+  );
+}
+
+function NumberInput({
+  value,
+  onChange,
+  unit,
+  step,
+  label,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  unit: string;
+  step?: string;
+  label: string;
+}) {
+  return (
+    <div className="relative sm:w-40">
+      <Input
+        type="number"
+        min={0}
+        step={step}
+        value={shownNumber(value)}
+        onChange={(e) => onChange(parse(e.target.value))}
+        aria-invalid={!(value >= 0) || undefined}
+        aria-label={label}
+        className="h-9 [appearance:textfield] pr-8 tabular-nums [&::-webkit-inner-spin-button]:appearance-none"
+      />
+      <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-sm text-muted-foreground">{unit}</span>
     </div>
   );
 }
