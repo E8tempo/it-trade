@@ -1,4 +1,17 @@
+{
+	# A browser opening the site by IP (DOMAIN=<IP>) sends no SNI, and Caddy would look for a certificate of the
+	# address the connection came to: inside Docker that's the container's, so the handshake failed
+	# (SSL_ERROR_INTERNAL_ERROR_ALERT). Such connections get the certificate of DOMAIN instead. Caddy applies
+	# it through the site's TLS connection policy, hence the tls block below.
+	default_sni {$DOMAIN}
+}
+
 {$DOMAIN} {
+	# Caddy's defaults; the block is here so default_sni has a policy to go to (see above)
+	tls {
+		protocols tls1.2 tls1.3
+	}
+
 	encode zstd gzip
 
 	# Browser protections for every response: HTTPS only (a year, subdomains too), no embedding in other
