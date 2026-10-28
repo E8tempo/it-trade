@@ -1,5 +1,6 @@
 # secrets: root .env (docker compose), backend/.env (development)
 .env
+.env.bak
 .env.local
 
 # python
