@@ -50,6 +50,16 @@ services:
     command: ["python", "-m", "app.worker"]
     stop_grace_period: 30s
 
+  # Next.js storefront and admin panel; server-side requests go straight to the API
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    environment:
+      API_URL: http://api:8000
+      TZ: ${TZ:-Europe/Simferopol}
+    depends_on:
+      - api
+
   caddy:
     image: caddy:2.10-alpine
     restart: unless-stopped
@@ -66,6 +76,7 @@ services:
       - caddy_config:/config
     depends_on:
       - api
+      - web
 
 volumes:
   pgdata:

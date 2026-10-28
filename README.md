@@ -3,15 +3,17 @@
 Интернет-магазин (Крым) на каталоге поставщика [b2b.i-t-p.pro](https://b2b.i-t-p.pro/download/docs/api/api.html).
 
 - **backend**: Python 3.14, FastAPI, SQLAlchemy (async), Alembic. Postgres в проде, SQLite в разработке.
-- **frontend**: Next.js 16 и shadcn (`frontend/`, свой git-репозиторий). Пока каркас: прокси к API и JWT-сессии; в docker compose ещё не добавлен.
+- **frontend**: Next.js 16 и shadcn (`frontend/`, свой git-репозиторий). В проде — сервис `web` в docker compose.
 - **деплой**: `docker compose` + Caddy (HTTPS через Let's Encrypt автоматически).
 
 ## Запуск на сервере
 
 ```bash
-cp .env.example .env      # DOMAIN, POSTGRES_PASSWORD, JWT_SECRET, ADMIN_EMAIL/ADMIN_PASSWORD, SUPPLIER_LOGIN/PASSWORD
-docker compose up -d
+./prod-env.sh             # .env: генерирует пароли и секреты, спрашивает домен, поставщика, почту и проверяет их
+docker compose up -d --build
 ```
+
+Подготовка сервера, бэкапы, обновление и разбор проблем: [docs/prod.md](docs/prod.md).
 
 Дальше:
 
@@ -33,7 +35,7 @@ docker compose up -d
  /media/* │ файл есть → отдаёт с диска (immutable)
           │ файла нет → api (скачать, снять знак, сохранить)
  /api/*   │ → api (FastAPI)
- /        │ → (будет) Next.js
+ /        │ → web (Next.js)
           └─────────────────────────────────────┘
  worker: категории/каталог раз в сутки, остатки каждые 30 мин, списки фото, очередь фото
  db: Postgres 18 (pg_trgm для поиска по подстроке)
@@ -177,7 +179,7 @@ CLI (`python -m app.cli --help`):
 
 ## Что дальше
 
-- витрина: корзина и оформление заказа (заказы в базе и их обработка в админке уже есть), вход и регистрация покупателей; сервис `web` в docker compose;
+- витрина: корзина и оформление заказа (заказы в базе и их обработка в админке уже есть), вход и регистрация покупателей;
 - заказы: передача заказа поставщику (`orders.create`, `order_items.client_update`);
 - доставка по Крыму, оплата;
 - закрашивание угловой надписи `www.i-t-p.pro`;
