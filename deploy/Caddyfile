@@ -31,8 +31,8 @@
 		reverse_proxy api:8000
 	}
 
-	# TODO: route to the Next.js frontend once it is added (reverse_proxy web:3000)
+	# everything else: the Next.js site and admin panel
 	handle {
-		respond "IT Trade: API is running, frontend is not deployed yet" 200
+		reverse_proxy web:3000
 	}
 }
