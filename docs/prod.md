@@ -57,7 +57,7 @@ ufw enable
 Рекомендуется:
 
 - **Вход по SSH только по ключу**: `PasswordAuthentication no` в `/etc/ssh/sshd_config`, затем `systemctl reload ssh`. Сначала проверьте, что вход по ключу работает.
-- **Отдельный пользователь** для деплоя: `adduser deploy && usermod -aG docker deploy`. Учтите, что группа `docker` по сути даёт root.
+- **Отдельный пользователь** для деплоя: `adduser deploy && usermod -aG docker deploy`. Группа начинает действовать после нового входа по SSH. Учтите, что группа `docker` по сути даёт root.
 - **Ограничение логов Docker.** Без него логи контейнеров растут, пока не займут весь диск. Создайте `/etc/docker/daemon.json`:
 
   ```json

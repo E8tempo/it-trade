@@ -32,11 +32,11 @@ async def main_image() -> int | None:
         return (await s.get(Product, 7)).main_image_id
 
 
-async def test_main_photo_comes_first_even_if_listed_last():
-    # real read_new response: the main photo is the last one
+async def test_photos_keep_the_supplier_order_and_the_first_is_main():
+    # real read_new response: `is_main` often marks the last photo, the supplier shows the first one
     assert await apply_image_lists([7], [item(11), item(12), item(10, is_main=True)]) == 3
-    assert [(i, p) for i, p, _ in await images()] == [(10, 0), (11, 1), (12, 2)]
-    assert await main_image() == 10
+    assert [(i, p) for i, p, _ in await images()] == [(11, 0), (12, 1), (10, 2)]
+    assert await main_image() == 11
 
 
 async def test_changed_url_bumps_version_and_removed_photos_are_deleted():

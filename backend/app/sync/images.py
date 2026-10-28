@@ -64,8 +64,8 @@ async def apply_image_lists(skus: list[int], items: list[dict]) -> int:
         keep: set[int] = set()
         main: dict[int, int | None] = {sku: None for sku in skus}
         for sku, imgs in by_sku.items():
-            # the main photo (`is_main`, often last in the response) first, then the supplier order
-            imgs.sort(key=lambda it: not it.get("is_main"))
+            # The supplier order, the first photo is the main one. `is_main` is not used: it marks a photo
+            # anywhere in the list (first in 42% of products, last in 33%, often the last of the old p_ set).
             for pos, it in enumerate(imgs):
                 iid = int(it["id"])
                 row = existing.get(iid)
